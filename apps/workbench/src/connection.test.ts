@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { applyStatusToDesktop, desktopButtonLabel, disconnectState, fullscreenButtonLabel, passwordForConnection, workstationActionEnabled, workstationButtonLabel } from "./connection";
+import { applyStatusToDesktop, desktopButtonLabel, disconnectState, fullscreenButtonLabel, fullscreenRecollapseVisible, passwordForConnection, workstationActionEnabled, workstationButtonLabel } from "./connection";
 
 describe("desktop connection state", () => {
   it("keeps a connected or connecting canvas visible while status refreshes", () => {
@@ -36,5 +36,11 @@ describe("desktop connection state", () => {
   it("turns the fullscreen action into exit while active", () => {
     expect(fullscreenButtonLabel(false)).toBe("Enter fullscreen");
     expect(fullscreenButtonLabel(true)).toBe("Exit fullscreen");
+  });
+
+  it("keeps a collapse affordance when fullscreen expands the sidebar", () => {
+    expect(fullscreenRecollapseVisible(true, false)).toBe(true);
+    expect(fullscreenRecollapseVisible(true, true)).toBe(false);
+    expect(fullscreenRecollapseVisible(false, false)).toBe(false);
   });
 });

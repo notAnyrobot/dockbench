@@ -103,6 +103,7 @@ def parser() -> argparse.ArgumentParser:
     command = argparse.ArgumentParser(prog="docker-ws", description="Manage the Docker Workstation.")
     actions = command.add_subparsers(dest="command", required=True, metavar="COMMAND")
     for action, description in {
+        "start": "Create or start the workstation without configuring VNC.",
         "enter": "Open Bash in the running workstation as the host user.",
         "stop": "Stop the workstation without removing it.",
         "status": "Print workstation state.",

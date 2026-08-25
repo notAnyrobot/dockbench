@@ -25,6 +25,11 @@ export function fullscreenButtonLabel(active: boolean): "Enter fullscreen" | "Ex
   return active ? "Exit fullscreen" : "Enter fullscreen";
 }
 
+/** Fullscreen hides the header, so an expanded sidebar needs its own collapse control. */
+export function fullscreenRecollapseVisible(fullscreen: boolean, sidebarCollapsed: boolean): boolean {
+  return fullscreen && !sidebarCollapsed;
+}
+
 export function disconnectState(authenticationFailed: boolean, intentionalStop: boolean): DesktopState | null {
   if (authenticationFailed) return null;
   return intentionalStop ? "stopped" : "running";
