@@ -123,6 +123,8 @@ CMD ["sleep", "infinity"]
 
 FROM core AS desktop
 
+LABEL io.docker-workstation.desktop-contract="v1"
+
 ARG MOZILLA_APT_KEY_SHA256=3ecc63922b7795eb23fdc449ff9396f9114cb3cf186d6f5b53ad4cc3ebfbb11f
 
 RUN install -d -m 0755 /etc/apt/keyrings \

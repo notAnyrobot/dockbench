@@ -19,7 +19,9 @@ from docker_ws.core.workstation import (
     Workstation,
     WorkstationError,
     WorkstationRebuildRequired,
+    WorkstationReplaceRequired,
 )
+from docker_ws.core.host_inventory import HostInventory
 
 LOG = logging.getLogger(__name__)
 ROOT = Path(__file__).resolve().parents[2]
@@ -40,6 +42,13 @@ class SessionRequest(BaseModel):
 
 class PasswordResetRequest(BaseModel):
     password: str = Field(min_length=6, max_length=8)
+
+
+class StartRequest(BaseModel):
+    image: str | None = Field(default=None, min_length=1, max_length=512)
+    gpu_uuids: list[str] = Field(default_factory=list, max_length=64)
+    all_gpus: bool = False
+    replace: bool = False
 
 
 class DesktopSessions:
@@ -71,6 +80,8 @@ class DesktopSessions:
 def safe_error(exc: Exception) -> JSONResponse:
     correlation_id = uuid.uuid4().hex
     LOG.warning("workbench request failed id=%s kind=%s", correlation_id, type(exc).__name__)
+    if isinstance(exc, WorkstationReplaceRequired):
+        return JSONResponse(status_code=409, content={"code": "workstation_replace_required", "message": "The requested image or GPU selection differs. Replacing keeps /workspace and /state but discards the old container filesystem.", "correlation_id": correlation_id})
     if isinstance(exc, WorkstationRebuildRequired):
         return JSONResponse(
             status_code=409,
@@ -132,10 +143,20 @@ def create_app(workstation: Workstation | None = None) -> FastAPI:
         except Exception as exc:
             return safe_error(exc)
 
+    @app.get("/api/host/inventory")
+    async def host_inventory():
+        try:
+            return await run_in_threadpool(lambda: HostInventory(ws().docker).inventory().public())
+        except Exception as exc:
+            return safe_error(exc)
+
     @app.post("/api/workstation/start")
-    async def start_workstation(request: Request, workbench_csrf: str | None = Cookie(default=None)):
+    async def start_workstation(request: Request, body: StartRequest | None = None, workbench_csrf: str | None = Cookie(default=None)):
         _require_csrf(request, workbench_csrf)
-        try: return (await run_in_threadpool(ws().start)).public()
+        try:
+            if body is None:
+                return (await run_in_threadpool(ws().start)).public()
+            return (await run_in_threadpool(ws().start, body.image, tuple(body.gpu_uuids), body.all_gpus, body.replace)).public()
         except Exception as exc: return safe_error(exc)
 
     @app.post("/api/workstation/stop")

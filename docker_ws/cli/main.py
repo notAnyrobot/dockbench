@@ -12,6 +12,7 @@ from typing import Sequence
 import uvicorn
 
 from docker_ws.core.workstation import Workstation, WorkstationError
+from docker_ws.core.host_inventory import HostInventory
 from docker_ws.core.images import WorkstationImages
 
 
@@ -24,12 +25,38 @@ def _fail(message: str) -> int:
     return 1
 
 
-def _workstation(action: str) -> int:
+def _workstation(action: str, image: str | None = None, gpus: list[str] | None = None,
+                 replace: bool = False) -> int:
     try:
         workstation = Workstation()
-        result = getattr(workstation, {"vnc": "open_vnc"}.get(action, action))()
+        if action == "start":
+            values = tuple(gpus or ())
+            result = workstation.start(image=image, gpus=tuple(value for value in values if value != "all"),
+                all_gpus="all" in values, replace=replace)
+        else:
+            result = getattr(workstation, {"vnc": "open_vnc"}.get(action, action))()
         if action == "status":
             print(f"{workstation.config.container_name}: {result.state}")
+        return 0
+    except WorkstationError as exc:
+        return _fail(str(exc))
+
+
+def _host_inventory(kind: str, as_json: bool) -> int:
+    try:
+        workstation = Workstation()
+        data = HostInventory(workstation.docker).inventory().public()
+        value = data["images" if kind == "images" else "gpus"]
+        if as_json:
+            import json
+            print(json.dumps(value, indent=2))
+        elif kind == "images":
+            for image in value:
+                desktop = " desktop-v1" if image["desktop_capable"] else " shell-only"
+                print(f"{image['display_reference']}\t{image['id']}\t{image['size']} bytes{desktop}")
+        else:
+            if data["gpu_diagnostic"]: print(f"GPU unavailable: {data['gpu_diagnostic']}")
+            for gpu in value: print(f"{gpu['index']}\t{gpu['uuid']}\t{gpu['name']}\t{gpu['memory_total_mib']} MiB")
         return 0
     except WorkstationError as exc:
         return _fail(str(exc))
@@ -76,14 +103,20 @@ def parser() -> argparse.ArgumentParser:
     command = argparse.ArgumentParser(prog="docker-ws", description="Manage the Docker Workstation.")
     actions = command.add_subparsers(dest="command", required=True, metavar="COMMAND")
     for action, description in {
-        "start": "Create or start the workstation without configuring VNC.",
         "enter": "Open Bash in the running workstation as the host user.",
         "stop": "Stop the workstation without removing it.",
         "status": "Print workstation state.",
         "vnc": "Provision VNC if needed and open the native viewer.",
         "workbench": "Serve the loopback-only web Workbench.",
     }.items():
-        actions.add_parser(action, help=description, description=description)
+        command_action = actions.add_parser(action, help=description, description=description)
+        if action == "start":
+            command_action.add_argument("--image", help="Tagged local image to use when creating the workstation.")
+            command_action.add_argument("--gpu", action="append", default=[], metavar="UUID_OR_INDEX", help="GPU UUID/index, or 'all'; repeat for multiple GPUs.")
+            command_action.add_argument("--replace", action="store_true", help="Replace a container whose immutable image/GPU launch request differs.")
+    for inventory_name, description in (("images", "List tagged local images."), ("gpus", "List NVIDIA GPUs available to Docker.")):
+        inventory = actions.add_parser(inventory_name, help=description, description=description)
+        inventory.add_argument("--json", action="store_true", help="Emit machine-readable JSON.")
     image = actions.add_parser("image", help="Build, replace, package, or load images.")
     image_actions = image.add_subparsers(dest="image_action", required=True, metavar="ACTION")
     image_actions.add_parser("build", help="Build or update the desktop image using Docker's layer cache.")
@@ -100,8 +133,12 @@ def parser() -> argparse.ArgumentParser:
 
 def main(argv: Sequence[str] | None = None) -> int:
     arguments = parser().parse_args(argv)
-    if arguments.command in {"start", "enter", "stop", "status", "vnc"}:
+    if arguments.command == "start":
+        return _workstation("start", arguments.image, arguments.gpu, arguments.replace)
+    if arguments.command in {"enter", "stop", "status", "vnc"}:
         return _workstation(arguments.command)
+    if arguments.command in {"images", "gpus"}:
+        return _host_inventory(arguments.command, arguments.json)
     if arguments.command == "workbench":
         return _workbench()
     if arguments.command == "image":

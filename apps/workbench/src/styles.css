@@ -217,6 +217,15 @@ button:disabled { opacity: .45; cursor: not-allowed; }
 .empty h1 { margin: 0; color: #f6f8fc; }
 .empty p { margin: 0 0 12px; }
 
+.launch-setup { width: min(620px, calc(100vw - 32px)); text-align: left; padding: 24px; border: 1px solid #40506b; border-radius: 12px; background: #172033; }
+.launch-setup h1 { margin-bottom: 8px; }
+.launch-setup label { display: grid; gap: 6px; margin: 14px 0; color: #cbd5e1; }
+.launch-setup select { padding: 10px; border: 1px solid #40506b; border-radius: 7px; background: #0b1020; color: #fff; }
+.launch-setup fieldset { margin: 16px 0; border: 1px solid #40506b; border-radius: 7px; }
+.launch-setup .check { display: block; margin: 10px 0; }
+.launch-setup .check input { width: auto; margin-right: 8px; }
+.capability { color: #9fdfcf; }.diagnostic { color: #fbbf24; }
+
 .modal {
   position: fixed;
   inset: 0;

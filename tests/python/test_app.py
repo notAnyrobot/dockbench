@@ -15,7 +15,9 @@ from docker_ws.web.app import DesktopSessions, create_app
 class FakeWorkstation:
     reset_password: str | None = None
     def status(self): return WorkstationStatus("stopped", False, "test", "docker-ws", "/workspace")
-    def start(self): return WorkstationStatus("running", False, "test", "docker-ws", "/workspace")
+    def start(self, *args):
+        self.start_args = args
+        return WorkstationStatus("running", False, "test", "docker-ws", "/workspace")
     def stop(self): return WorkstationStatus("stopped", False, "test", "docker-ws", "/workspace")
     def reset_vnc_password(self, password):
         self.reset_password = password
@@ -109,3 +111,12 @@ def test_tcp_open_failure_removes_the_desktop_socket():
         with client.websocket_connect(f"/api/desktop/sessions/{token}/ws", headers={"origin": "http://testserver"}) as socket:
             socket.receive_bytes()
     assert app.state.desktop_sockets == set()
+
+
+def test_start_accepts_image_gpu_and_replace_fields():
+    workstation = FakeWorkstation()
+    client = TestClient(create_app(workstation))
+    token = client.get("/api/workstation").json()["csrf_token"]
+    response = client.post("/api/workstation/start", json={"image": "ubuntu:24.04", "gpu_uuids": ["GPU-a"], "replace": True}, headers={"origin": "http://testserver", "x-csrf-token": token})
+    assert response.status_code == 200
+    assert workstation.start_args == ("ubuntu:24.04", ("GPU-a",), False, True)

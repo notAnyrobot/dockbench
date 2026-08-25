@@ -1,15 +1,16 @@
 # Docker Workstation
 
-One Linux `amd64` Docker build context for GPU-enabled robotics development.
+One Linux `amd64` Docker build context and a generic local-image workstation launcher.
 The Dockerfile at `assets/docker/Dockerfile` has a CUDA `core` target and a
 `desktop` target that adds XFCE, TigerVNC, and Firefox. Host lifecycle code is
 the installable `docker_ws` Python package; `apps/workbench` is the browser UI.
 Projects, environments, data, and credentials remain on host mounts; this
 repository deliberately contains no project checkout or credential material.
 
-The default image is `docker-ws:u22.04-cu12.8.1-v1-desktop` and the default
-container name and hostname are both `docker-ws`. Existing `ROBOTICS_WS_*`
-configuration variables and `.robotics-ws` state paths remain supported.
+The bundled desktop image is optional: `docker-ws` launches any tagged local
+image that provides `/bin/sh` and `sleep`. The managed container name and
+hostname default to `docker-ws`. Existing `ROBOTICS_WS_*` configuration
+variables and `.robotics-ws` state paths remain supported.
 
 ## Build and verify
 
@@ -33,13 +34,21 @@ replace the existing container so it immediately uses that image, run
 `/workspace` projects and `.robotics-ws` state, but changes made only in the old
 container filesystem are discarded.
 
-Start a persistent workstation with the repository-local CLI:
+Inspect tagged local images and GPUs, then start a persistent workstation:
 
 ```bash
-uv run docker-ws start
+uv run docker-ws images
+uv run docker-ws gpus
+uv run docker-ws start --image ubuntu:24.04
+uv run docker-ws start --image YOUR_IMAGE --gpu 0 --gpu GPU-UUID
 uv run docker-ws enter
-uv run docker-ws vnc
 ```
+
+GPU selection is CPU-only by default. Use `--gpu all` to select every reported
+GPU. A running managed container is immutable: changing its image or GPUs
+requires `--replace`, which retains `/workspace` and `/state` but discards
+changes made only in the old container filesystem. Generic containers run as
+root, so files created in `/workspace` may become root-owned on the host.
 
 By default, `docker-ws` mounts the host's `~/Code` at `/workspace` and preserves
 state at `.robotics-ws`. Set `ROBOTICS_WS_CODE_ROOT` to mount a different host
@@ -49,9 +58,10 @@ and opens the viewer. Run
 `uv run docker-ws --help` for all operations. Set `ROBOTICS_WS_VNC_PASSWORD` only in the environment
 when provisioning a password—never store it in this repository.
 
-The shell and XFCE desktop use the host-mapped user rather than running every
-graphical process as root. That user has unrestricted passwordless `sudo`
-inside the container, so administrative commands work directly:
+The bundled image advertises desktop contract `v1`, enabling VNC and Workbench
+desktop controls. Shell-only images never have VNC installed or started; use
+`docker-ws enter` instead. The generic launcher runs root to avoid requiring
+user-management tools in arbitrary images.
 
 ```bash
 sudo apt update
@@ -68,9 +78,9 @@ To transfer built images, use `uv run docker-ws image package [DIRECTORY]` or
 ## Workbench
 
 Workbench is a desktop-first, single-user browser companion for the same
-`docker-ws` workstation. It can show status, start or stop the workstation,
-and open its noVNC desktop. Image build/rebuild, shell access, image transfer,
-and other Docker actions intentionally remain CLI-only.
+`docker-ws` workstation. When no container exists it lists local images and
+available GPUs, then creates one selected container. It supports one managed
+container today; multi-container tabs are intentionally deferred.
 
 Install its Python dependencies and build the browser client once:
 
