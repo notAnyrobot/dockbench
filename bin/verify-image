@@ -1,0 +1,37 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+minimum_driver=580.65.06
+
+[[ "$(uname -m)" == x86_64 ]]
+[[ "$(dpkg --print-architecture)" == amd64 ]]
+
+for command in uv conda hf git nvidia-smi; do
+  command -v "$command" >/dev/null
+done
+
+uv --version
+conda --version
+hf --help >/dev/null
+git lfs version
+
+[[ -d /Code && -w /Code ]]
+[[ -d /state && -w /state ]]
+
+while IFS= read -r driver; do
+  first="$(printf '%s\n' "$minimum_driver" "$driver" | sort -V | head -n 1)"
+  [[ "$first" == "$minimum_driver" ]] || {
+    echo "NVIDIA driver $driver is below $minimum_driver" >&2
+    exit 1
+  }
+done < <(nvidia-smi --query-gpu=driver_version --format=csv,noheader)
+
+gpu_count="$(nvidia-smi --query-gpu=name --format=csv,noheader | wc -l | tr -d ' ')"
+if [[ -n "${EXPECTED_GPU_COUNT:-}" ]]; then
+  [[ "$gpu_count" == "$EXPECTED_GPU_COUNT" ]] || {
+    echo "expected ${EXPECTED_GPU_COUNT} GPUs, found $gpu_count" >&2
+    exit 1
+  }
+fi
+
+echo "verified linux/amd64 with ${gpu_count} NVIDIA GPU(s)"

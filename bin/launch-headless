@@ -1,0 +1,247 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+fail() {
+  printf 'ERROR: %s\n' "$*" >&2
+  exit 1
+}
+
+usage() {
+  cat <<'EOF'
+Usage: launch-headless {--start|--enter|--stop|--status|--help}
+
+  --start   Create or start the persistent headless container.
+  --enter   Open Bash in the running container as the host user.
+  --stop    Stop the container without removing it.
+  --status  Print absent, stopped, or running.
+  --help    Show this message.
+EOF
+}
+
+test "$#" -eq 1 || {
+  usage >&2
+  fail 'exactly one command flag is required'
+}
+
+command_flag="$1"
+case "$command_flag" in
+  --start|--enter|--stop|--status|--help) ;;
+  *)
+    usage >&2
+    fail "unknown command: $command_flag"
+    ;;
+esac
+
+if test "$command_flag" = --help; then
+  usage
+  exit 0
+fi
+
+script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+workspace_root="$(cd "$script_dir/../.." && pwd)"
+default_code_root="$workspace_root"
+candidate="$workspace_root"
+while test "$candidate" != /; do
+  if test "${candidate##*/}" = Code; then
+    default_code_root="$candidate"
+    break
+  fi
+  candidate="$(dirname "$candidate")"
+done
+docker_cmd="${ROBOTICS_WS_DOCKER:-docker}"
+image="${ROBOTICS_WS_HEADLESS_IMAGE:-robotics-ws:u22.04-cu12.8.1-v1-headless}"
+container_name="${ROBOTICS_WS_HEADLESS_NAME:-robotics-ws-headless}"
+code_root="${ROBOTICS_WS_CODE_ROOT:-$default_code_root}"
+state_root="${ROBOTICS_WS_STATE_ROOT:-$(dirname "$code_root")/.robotics-ws}"
+shm_size="${ROBOTICS_WS_SHM_SIZE:-32g}"
+host_uid="${ROBOTICS_WS_HOST_UID:-$(id -u)}"
+host_gid="${ROBOTICS_WS_HOST_GID:-$(id -g)}"
+host_user="${ROBOTICS_WS_HOST_USER:-$(id -un)}"
+
+command -v "$docker_cmd" >/dev/null 2>&1 || fail "Docker command not found: $docker_cmd"
+test -d "$code_root" || fail "code root does not exist: $code_root"
+
+security_options="$($docker_cmd info --format '{{json .SecurityOptions}}')"
+if [[ "$security_options" == *rootless* ]]; then
+  docker_mode=rootless
+  container_uid=0
+  container_gid=0
+else
+  docker_mode=rootful
+  container_uid="$host_uid"
+  container_gid="$host_gid"
+fi
+launch_config="$code_root|$state_root|$shm_size|$host_uid|$host_gid|$docker_mode"
+
+container_status() {
+  "$docker_cmd" container inspect \
+    --format '{{.State.Status}}' "$container_name" 2>/dev/null
+}
+
+require_current_image() {
+  local container_image_id
+  local current_image_id
+
+  container_image_id="$($docker_cmd container inspect \
+    --format '{{.Image}}' "$container_name")"
+  current_image_id="$($docker_cmd image inspect \
+    --format '{{.Id}}' "$image")"
+  test "$container_image_id" = "$current_image_id" || fail \
+    "$container_name uses a stale image; remove and recreate it with: docker rm -f $container_name"
+}
+
+require_current_config() {
+  local container_config
+
+  container_config="$($docker_cmd container inspect \
+    --format '{{index .Config.Labels "robotics-ws.launch-config"}}' \
+    "$container_name")"
+  test "$container_config" = "$launch_config" || fail \
+    "$container_name uses different launch settings; remove and recreate it with: docker rm -f $container_name"
+}
+
+prepare_user() {
+  "$docker_cmd" exec -i --user root "$container_name" /bin/bash -s -- \
+    "$host_user" "$container_uid" "$container_gid" "$docker_mode" <<'EOF'
+set -euo pipefail
+
+requested_user="$1"
+requested_uid="$2"
+requested_gid="$3"
+docker_mode="$4"
+
+if test "$docker_mode" = rootful; then
+  if group_entry="$(getent group "$requested_gid")"; then
+    container_group="${group_entry%%:*}"
+  else
+    container_group="$requested_user"
+    if getent group "$container_group" >/dev/null; then
+      container_group="${requested_user}-${requested_gid}"
+    fi
+    groupadd --gid "$requested_gid" "$container_group"
+  fi
+
+  if ! getent passwd "$requested_uid" >/dev/null; then
+    container_user="$requested_user"
+    if getent passwd "$container_user" >/dev/null; then
+      container_user="${requested_user}-${requested_uid}"
+    fi
+    useradd \
+      --uid "$requested_uid" \
+      --gid "$requested_gid" \
+      --home-dir /state/home \
+      --shell /bin/bash \
+      --no-create-home \
+      "$container_user"
+  fi
+fi
+
+ownership_marker="/state/.owner-${requested_uid}-${requested_gid}"
+if test "$docker_mode" = rootful && test ! -e "$ownership_marker"; then
+  chown -R "$requested_uid:$requested_gid" /state
+  touch "$ownership_marker"
+  chown "$requested_uid:$requested_gid" "$ownership_marker"
+fi
+
+cat >/state/.robotics-ws-bashrc <<'BASHRC'
+test -r /etc/bash.bashrc && source /etc/bash.bashrc
+test -r "$HOME/.bashrc" && source "$HOME/.bashrc"
+PS1="${ROBOTICS_WS_PROMPT_USER:-user}@\h:\w\$ "
+BASHRC
+chown "$requested_uid:$requested_gid" /state/.robotics-ws-bashrc
+EOF
+}
+
+start_container() {
+  local status
+  status="$(container_status || true)"
+
+  case "$status" in
+    '')
+      mkdir -p "$state_root"
+      "$docker_cmd" run -d \
+        --name "$container_name" \
+        --hostname "$container_name" \
+        --platform linux/amd64 \
+        --gpus all \
+        --shm-size "$shm_size" \
+        --restart unless-stopped \
+        --label "robotics-ws.launch-config=$launch_config" \
+        --mount "type=bind,src=$code_root,dst=/Code" \
+        --mount "type=bind,src=$state_root,dst=/state" \
+        "$image" >/dev/null
+      prepare_user
+      printf '%s: created and running\n' "$container_name"
+      ;;
+    running)
+      require_current_image
+      require_current_config
+      prepare_user
+      printf '%s: already running\n' "$container_name"
+      ;;
+    created|exited)
+      require_current_image
+      require_current_config
+      "$docker_cmd" start "$container_name" >/dev/null
+      prepare_user
+      printf '%s: started\n' "$container_name"
+      ;;
+    *)
+      fail "unsupported container state for --start: $status"
+      ;;
+  esac
+}
+
+enter_container() {
+  local status
+  status="$(container_status || true)"
+  test "$status" = running || fail "$container_name is not running; use --start first"
+  require_current_image
+  require_current_config
+
+  "$docker_cmd" exec -it \
+    --user "$container_uid:$container_gid" \
+    --workdir /Code \
+    --env HOME=/state/home \
+    --env "USER=$host_user" \
+    --env "LOGNAME=$host_user" \
+    --env "ROBOTICS_WS_PROMPT_USER=$host_user" \
+    "$container_name" \
+    /bin/bash --rcfile /state/.robotics-ws-bashrc
+}
+
+stop_container() {
+  local status
+  status="$(container_status || true)"
+
+  case "$status" in
+    '') fail "$container_name does not exist; use --start first" ;;
+    running)
+      "$docker_cmd" stop "$container_name" >/dev/null
+      printf '%s: stopped\n' "$container_name"
+      ;;
+    created|exited)
+      printf '%s: already stopped\n' "$container_name"
+      ;;
+    *) fail "unsupported container state for --stop: $status" ;;
+  esac
+}
+
+show_status() {
+  local status
+  status="$(container_status || true)"
+
+  case "$status" in
+    '') printf '%s: absent\n' "$container_name" ;;
+    running) printf '%s: running\n' "$container_name" ;;
+    created|exited) printf '%s: stopped\n' "$container_name" ;;
+    *) printf '%s: %s\n' "$container_name" "$status" ;;
+  esac
+}
+
+case "$command_flag" in
+  --start) start_container ;;
+  --enter) enter_container ;;
+  --stop) stop_container ;;
+  --status) show_status ;;
+esac
