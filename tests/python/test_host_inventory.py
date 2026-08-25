@@ -4,6 +4,7 @@ import subprocess
 import pytest
 
 from docker_ws.core.errors import WorkstationError
+from docker_ws.core.defaults import DEFAULT_IMAGE
 from docker_ws.core.host_inventory import HostInventory
 
 
@@ -21,6 +22,17 @@ def test_images_are_tagged_grouped_and_resolved(monkeypatch):
     images = inventory.images()
     assert len(images) == 1 and images[0].references == ("ubuntu:24.04", "ubuntu:latest")
     assert inventory.resolve_image("ubuntu:latest").id == "sha256:full"
+
+
+def test_pre_label_default_desktop_image_retains_desktop_capability():
+    class LegacyDesktopDocker(Docker):
+        def run(self, args, **kwargs):
+            if args[:2] == ["image", "ls"]: return "sha256:short\tdocker-ws\tu22.04-cu12.8.1-v1-desktop"
+            if args[:2] == ["image", "inspect"]:
+                return json.dumps({"Id": "sha256:desktop", "RepoTags": [DEFAULT_IMAGE], "Size": 42, "Created": "now", "Architecture": "amd64", "Config": {"Labels": {}}})
+            return super().run(args, **kwargs)
+
+    assert HostInventory(LegacyDesktopDocker()).images()[0].desktop_capable is True
 
 
 def test_gpu_diagnostic_is_safe_when_nvidia_smi_is_absent(monkeypatch):
