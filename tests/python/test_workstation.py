@@ -3,17 +3,18 @@ from pathlib import Path
 import pytest
 
 from docker_ws.core.errors import WorkstationError, WorkstationReplaceRequired
+from docker_ws.core.defaults import DEFAULT_IMAGE
 from docker_ws.core.host_inventory import GPU, LocalImage
 from docker_ws.core.workstation import Workstation, WorkstationConfig
 
 
 class FakeInventory:
     def __init__(self, desktop=False):
-        self.image = LocalImage("sha256:image", ("test:image",), 1, "now", "amd64", "v1" if desktop else None)
+        self.image = LocalImage("sha256:image", (DEFAULT_IMAGE, "test:image"), 1, "now", "amd64", "v1" if desktop else None)
         self.gpu = GPU("GPU-abc", 0, "Test GPU", 1024)
     def resolve_image(self, selection):
         if not selection: raise WorkstationError("an image is required")
-        if selection != "test:image": raise WorkstationError("image is not available locally")
+        if selection not in {DEFAULT_IMAGE, "test:image"}: raise WorkstationError("image is not available locally")
         return self.image
     def resolve_gpus(self, selected, all_gpus=False):
         if all_gpus: return (self.gpu,)
@@ -52,15 +53,22 @@ def config(tmp_path: Path, image=None):
     return WorkstationConfig(tmp_path, "docker", code, tmp_path / ".robotics-ws", "8g", 1234, 5678, "robot", image, "robot-ws", 5901, "vncviewer", "rootful", 1234, 5678)
 
 
-def test_creation_requires_explicit_image_and_cpu_is_default(tmp_path):
-    fake = FakeDocker(config(tmp_path)); ws = Workstation(fake.config, fake, FakeInventory())
-    with pytest.raises(WorkstationError, match="image is required"):
-        ws.start()
-    result = ws.start(image="test:image")
+def test_creation_defaults_to_desktop_image_and_all_gpus(tmp_path):
+    fake = FakeDocker(config(tmp_path, DEFAULT_IMAGE)); ws = Workstation(fake.config, fake, FakeInventory())
+    result = ws.start()
     command = next(command for command in fake.commands if command[:2] == ["run", "-d"])
-    assert result.state == "running" and result.gpu_uuids == ()
-    assert "--gpus" not in command and command[-3:] == ["sha256:image", "-lc", "exec sleep infinity"]
+    assert result.state == "running" and result.image_ref == DEFAULT_IMAGE and result.gpu_uuids == ("GPU-abc",)
+    assert ["--gpus", "device=GPU-abc"] == command[command.index("--gpus"):command.index("--gpus") + 2]
+    assert command[-3:] == ["sha256:image", "-lc", "exec sleep infinity"]
     assert "--entrypoint" in command and any("dst=/workspace" in item for item in command)
+
+
+def test_creation_can_explicitly_select_cpu_only(tmp_path):
+    fake = FakeDocker(config(tmp_path, DEFAULT_IMAGE)); ws = Workstation(fake.config, fake, FakeInventory())
+    result = ws.start(all_gpus=False)
+    command = next(command for command in fake.commands if command[:2] == ["run", "-d"])
+    assert result.gpu_uuids == ()
+    assert "--gpus" not in command
 
 
 def test_selected_gpu_is_persisted_by_uuid_and_replace_is_explicit(tmp_path):
@@ -69,8 +77,8 @@ def test_selected_gpu_is_persisted_by_uuid_and_replace_is_explicit(tmp_path):
     run = next(command for command in fake.commands if command[:2] == ["run", "-d"])
     assert ["--gpus", "device=GPU-abc"] == run[run.index("--gpus"):run.index("--gpus") + 2]
     with pytest.raises(WorkstationReplaceRequired, match="--replace"):
-        ws.start(image="test:image")
-    ws.start(image="test:image", replace=True)
+        ws.start(image="test:image", all_gpus=False)
+    ws.start(image="test:image", all_gpus=False, replace=True)
     assert ["rm", "robot-ws"] in fake.commands
 
 

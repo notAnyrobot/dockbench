@@ -119,4 +119,4 @@ def test_start_accepts_image_gpu_and_replace_fields():
     token = client.get("/api/workstation").json()["csrf_token"]
     response = client.post("/api/workstation/start", json={"image": "ubuntu:24.04", "gpu_uuids": ["GPU-a"], "replace": True}, headers={"origin": "http://testserver", "x-csrf-token": token})
     assert response.status_code == 200
-    assert workstation.start_args == ("ubuntu:24.04", ("GPU-a",), False, True)
+    assert workstation.start_args == ("ubuntu:24.04", ("GPU-a",), None, True)

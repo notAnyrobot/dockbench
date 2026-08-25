@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { applyStatusToDesktop, desktopButtonLabel, disconnectState, fullscreenButtonLabel, fullscreenRecollapseVisible, passwordForConnection, workstationActionEnabled, workstationButtonLabel } from "./connection";
+import { applyStatusToDesktop, defaultLaunchSelection, desktopButtonLabel, disconnectState, fullscreenButtonLabel, fullscreenRecollapseVisible, passwordForConnection, workstationActionEnabled, workstationButtonLabel } from "./connection";
 
 describe("desktop connection state", () => {
   it("keeps a connected or connecting canvas visible while status refreshes", () => {
@@ -42,5 +42,13 @@ describe("desktop connection state", () => {
     expect(fullscreenRecollapseVisible(true, false)).toBe(true);
     expect(fullscreenRecollapseVisible(true, true)).toBe(false);
     expect(fullscreenRecollapseVisible(false, false)).toBe(false);
+  });
+
+  it("defaults launch setup to the desktop image and all GPUs", () => {
+    expect(defaultLaunchSelection(
+      [{ id: "sha256:desktop", display_reference: "docker-ws:u22.04-cu12.8.1-v1-desktop" }],
+      [{ uuid: "GPU-a" }, { uuid: "GPU-b" }],
+      "docker-ws:u22.04-cu12.8.1-v1-desktop",
+    )).toEqual({ image: "sha256:desktop", gpus: ["GPU-a", "GPU-b"] });
   });
 });

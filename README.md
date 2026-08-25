@@ -39,13 +39,15 @@ Inspect tagged local images and GPUs, then start a persistent workstation:
 ```bash
 uv run docker-ws images
 uv run docker-ws gpus
-uv run docker-ws start --image ubuntu:24.04
+uv run docker-ws start
+uv run docker-ws start --image ubuntu:24.04 --gpu none
 uv run docker-ws start --image YOUR_IMAGE --gpu 0 --gpu GPU-UUID
 uv run docker-ws enter
 ```
 
-GPU selection is CPU-only by default. Use `--gpu all` to select every reported
-GPU. A running managed container is immutable: changing its image or GPUs
+The default launch uses `docker-ws:u22.04-cu12.8.1-v1-desktop` and all reported
+GPUs. Use `--gpu none` for CPU-only operation, or repeat `--gpu` to select a
+specific subset. A running managed container is immutable: changing its image or GPUs
 requires `--replace`, which retains `/workspace` and `/state` but discards
 changes made only in the old container filesystem. Generic containers run as
 root, so files created in `/workspace` may become root-owned on the host.

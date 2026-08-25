@@ -30,6 +30,17 @@ export function fullscreenRecollapseVisible(fullscreen: boolean, sidebarCollapse
   return fullscreen && !sidebarCollapsed;
 }
 
+export function defaultLaunchSelection(
+  images: Array<{ id: string; display_reference: string }>,
+  gpus: Array<{ uuid: string }>,
+  defaultImage: string,
+): { image: string; gpus: string[] } {
+  return {
+    image: images.find((item) => item.display_reference === defaultImage)?.id ?? "",
+    gpus: gpus.map((gpu) => gpu.uuid),
+  };
+}
+
 export function disconnectState(authenticationFailed: boolean, intentionalStop: boolean): DesktopState | null {
   if (authenticationFailed) return null;
   return intentionalStop ? "stopped" : "running";

@@ -34,8 +34,10 @@ def test_start_parser_accepts_image_repeated_gpus_all_replace_and_bare_restart()
     assert (selected.image, selected.gpu, selected.replace) == ("ubuntu:24.04", ["0", "GPU-a"], True)
     all_gpus = command.parse_args(["start", "--gpu", "all"])
     assert all_gpus.image is None and all_gpus.gpu == ["all"] and all_gpus.replace is False
+    cpu_only = command.parse_args(["start", "--gpu", "none"])
+    assert cpu_only.gpu == ["none"]
     bare = command.parse_args(["start"])
-    assert bare.image is None and bare.gpu == [] and bare.replace is False
+    assert bare.image is None and bare.gpu is None and bare.replace is False
 
 
 def test_start_dispatches_all_launch_options(monkeypatch):

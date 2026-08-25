@@ -15,6 +15,7 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Iterable, Protocol
 
+from docker_ws.core.defaults import DEFAULT_IMAGE
 from docker_ws.core.errors import WorkstationError, WorkstationRebuildRequired, WorkstationReplaceRequired
 from docker_ws.core.host_inventory import HostInventory
 
@@ -51,7 +52,7 @@ class WorkstationConfig:
         if not code_root.is_dir(): raise WorkstationError(f"code root does not exist: {code_root}")
         security = SubprocessDockerRunner(docker).run(["info", "--format", "{{json .SecurityOptions}}"], capture=True); rootless = "rootless" in security
         uid = int(env.get("ROBOTICS_WS_HOST_UID", str(os.getuid()))); gid = int(env.get("ROBOTICS_WS_HOST_GID", str(os.getgid())))
-        return cls(root, docker, code_root, state_root, env.get("ROBOTICS_WS_SHM_SIZE", "32g"), uid, gid, env.get("ROBOTICS_WS_HOST_USER", "user"), env.get("ROBOTICS_WS_DESKTOP_IMAGE"), env.get("ROBOTICS_WS_DESKTOP_NAME", "docker-ws"), int(port), env.get("ROBOTICS_WS_VNCVIEWER", "vncviewer"), "rootless" if rootless else "rootful", 0 if rootless else uid, 0 if rootless else gid)
+        return cls(root, docker, code_root, state_root, env.get("ROBOTICS_WS_SHM_SIZE", "32g"), uid, gid, env.get("ROBOTICS_WS_HOST_USER", "user"), env.get("ROBOTICS_WS_DESKTOP_IMAGE", DEFAULT_IMAGE), env.get("ROBOTICS_WS_DESKTOP_NAME", "docker-ws"), int(port), env.get("ROBOTICS_WS_VNCVIEWER", "vncviewer"), "rootless" if rootless else "rootful", 0 if rootless else uid, 0 if rootless else gid)
 
 
 @dataclass(frozen=True)
@@ -101,20 +102,18 @@ class Workstation:
     def _container_image_id(self) -> str | None:
         try: return self.docker.run(["container", "inspect", "--format", "{{.Image}}", self.config.container_name], capture=True)
         except WorkstationError: return None
-    def _legacy_desktop_capable(self) -> bool:
-        """Recognize only the historical bundled desktop family without blessing arbitrary images."""
-        if not self._container_status(): return False
-        if self.config.image and self.config.image.startswith("docker-ws:"):
-            return True
+    def _legacy_image(self):
+        """Resolve the actual image behind a pre-launch-spec container."""
+        if not self._container_status(): return None
         try:
             image_id = self._container_image_id()
-            return any(image.id == image_id and any(ref.startswith("docker-ws:") for ref in image.references)
-                for image in getattr(self.inventory, "images")())
+            return next((image for image in getattr(self.inventory, "images")() if image.id == image_id), None)
         except (AttributeError, WorkstationError):
-            return False
+            return None
     def status(self) -> WorkstationStatus:
         raw = self._container_status(); state = "absent" if not raw else "running" if raw == "running" else "stopped" if raw in {"created", "exited"} else "unavailable"; spec = self._launch_spec()
-        image_id = spec.image_id if spec else (self._container_image_id() if raw else None); image_ref = spec.image_ref if spec else self.config.image; desktop = spec.desktop_capable if spec else self._legacy_desktop_capable()
+        legacy_image = self._legacy_image() if raw and spec is None else None
+        image_id = spec.image_id if spec else (self._container_image_id() if raw else None); image_ref = spec.image_ref if spec else (legacy_image.display_reference if legacy_image else self.config.image); desktop = spec.desktop_capable if spec else bool(legacy_image and any(ref.startswith("docker-ws:") for ref in legacy_image.references))
         return WorkstationStatus(state, self._vnc_running() if state == "running" and desktop else False, image_ref or image_id or "", self.config.container_name, "/workspace", image_id, image_ref, spec.gpu_uuids if spec else (), desktop, None if state != "unavailable" else f"Docker state: {raw}")
     def _specification(self, image: str | None, gpus: tuple[str, ...], all_gpus: bool) -> LaunchSpecification:
         selected = self.inventory.resolve_image(image or self.config.image or ""); selected_gpus = self.inventory.resolve_gpus(gpus, all_gpus)
@@ -157,15 +156,15 @@ chown "$requested_uid:$requested_gid" /state/.robotics-ws-bashrc
         if raw == "running": self.docker.run(["stop", self.config.container_name])
         if raw in {"running", "created", "exited"}: self.docker.run(["rm", self.config.container_name])
         elif raw: raise WorkstationError(f"unsupported container state for replacement: {raw}")
-    def start(self, image: str | None = None, gpus: tuple[str, ...] = (), all_gpus: bool = False, replace: bool = False) -> WorkstationStatus:
+    def start(self, image: str | None = None, gpus: tuple[str, ...] = (), all_gpus: bool | None = None, replace: bool = False) -> WorkstationStatus:
         with self.locked():
-            raw = self._container_status(); existing = self._launch_spec(); requested = image is not None or bool(gpus) or all_gpus
+            raw = self._container_status(); existing = self._launch_spec(); requested = image is not None or bool(gpus) or all_gpus is not None
             if raw and not requested and not replace:
                 if raw in {"created", "exited"}: self.docker.run(["start", self.config.container_name])
                 elif raw != "running": raise WorkstationError(f"unsupported container state for --start: {raw}")
                 if self.status().desktop_capable: self._prepare_user()
                 return self.status()
-            spec = self._specification(image, gpus, all_gpus)
+            spec = self._specification(image, gpus, (not gpus) if all_gpus is None else all_gpus)
             if raw:
                 if existing == spec and not replace:
                     if raw in {"created", "exited"}: self.docker.run(["start", self.config.container_name])
@@ -178,9 +177,9 @@ chown "$requested_uid:$requested_gid" /state/.robotics-ws-bashrc
             if spec.desktop_capable: self._prepare_user()
             return self.status()
     def build(self) -> None:
-        image = self.config.image or "docker-ws:u22.04-cu12.8.1-v1-desktop"; self.docker.run(["buildx", "build", "--platform", "linux/amd64", "--file", str(self.config.repository_root / "assets/docker/Dockerfile"), "--target", "desktop", "--load", "--tag", image, str(self.config.repository_root)]); print(f"{image}: image built")
+        image = self.config.image or DEFAULT_IMAGE; self.docker.run(["buildx", "build", "--platform", "linux/amd64", "--file", str(self.config.repository_root / "assets/docker/Dockerfile"), "--target", "desktop", "--load", "--tag", image, str(self.config.repository_root)]); print(f"{image}: image built")
     def rebuild(self) -> WorkstationStatus:
-        self.build(); return self.start(image=self.config.image or "docker-ws:u22.04-cu12.8.1-v1-desktop", replace=True)
+        self.build(); return self.start(image=self.config.image or DEFAULT_IMAGE, replace=True)
     def enter(self) -> None:
         if self._container_status() != "running": raise WorkstationError(f"{self.config.container_name} is not running; use --start first")
         c = self.config

@@ -31,8 +31,10 @@ def _workstation(action: str, image: str | None = None, gpus: list[str] | None =
         workstation = Workstation()
         if action == "start":
             values = tuple(gpus or ())
-            result = workstation.start(image=image, gpus=tuple(value for value in values if value != "all"),
-                all_gpus="all" in values, replace=replace)
+            if "none" in values and len(values) != 1:
+                raise WorkstationError("--gpu none cannot be combined with other GPU selections")
+            result = workstation.start(image=image, gpus=tuple(value for value in values if value not in {"all", "none"}),
+                all_gpus=None if gpus is None else "all" in values, replace=replace)
         else:
             result = getattr(workstation, {"vnc": "open_vnc"}.get(action, action))()
         if action == "status":
@@ -113,7 +115,7 @@ def parser() -> argparse.ArgumentParser:
         command_action = actions.add_parser(action, help=description, description=description)
         if action == "start":
             command_action.add_argument("--image", help="Tagged local image to use when creating the workstation.")
-            command_action.add_argument("--gpu", action="append", default=[], metavar="UUID_OR_INDEX", help="GPU UUID/index, or 'all'; repeat for multiple GPUs.")
+            command_action.add_argument("--gpu", action="append", default=None, metavar="UUID_OR_INDEX", help="GPU UUID/index, 'all' (default), or 'none'; repeat for multiple GPUs.")
             command_action.add_argument("--replace", action="store_true", help="Replace a container whose immutable image/GPU launch request differs.")
     for inventory_name, description in (("images", "List tagged local images."), ("gpus", "List NVIDIA GPUs available to Docker.")):
         inventory = actions.add_parser(inventory_name, help=description, description=description)

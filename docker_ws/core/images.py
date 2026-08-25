@@ -8,10 +8,10 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Sequence
 
+from docker_ws.core.defaults import DEFAULT_IMAGE
 from docker_ws.core.workstation import WorkstationError
 
 
-DEFAULT_IMAGE = "docker-ws:u22.04-cu12.8.1-v1-desktop"
 ARCHIVE_NAME = "docker-ws-u22.04-cu12.8.1-v1-desktop.tar"
 Run = Callable[..., subprocess.CompletedProcess[str]]
 

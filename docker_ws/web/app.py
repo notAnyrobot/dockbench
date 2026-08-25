@@ -15,6 +15,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
+from docker_ws.core.defaults import DEFAULT_IMAGE
 from docker_ws.core.workstation import (
     Workstation,
     WorkstationError,
@@ -47,7 +48,7 @@ class PasswordResetRequest(BaseModel):
 class StartRequest(BaseModel):
     image: str | None = Field(default=None, min_length=1, max_length=512)
     gpu_uuids: list[str] = Field(default_factory=list, max_length=64)
-    all_gpus: bool = False
+    all_gpus: bool | None = None
     replace: bool = False
 
 
@@ -146,7 +147,9 @@ def create_app(workstation: Workstation | None = None) -> FastAPI:
     @app.get("/api/host/inventory")
     async def host_inventory():
         try:
-            return await run_in_threadpool(lambda: HostInventory(ws().docker).inventory().public())
+            workstation = ws()
+            inventory = await run_in_threadpool(lambda: HostInventory(workstation.docker).inventory().public())
+            return {**inventory, "default_image": workstation.config.image or DEFAULT_IMAGE, "default_all_gpus": True}
         except Exception as exc:
             return safe_error(exc)
 
