@@ -1,0 +1,21 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+test -e "$FAKE_VNC_RUNNING" || {
+  echo 'VNC viewer opened before the server was ready' >&2
+  exit 1
+}
+test "${1:-}" = '-SecurityTypes=VncAuth' || {
+  echo 'VNC viewer opened without explicit VNC authentication' >&2
+  exit 1
+}
+test "${2:-}" = "-PasswordFile=$FAKE_VNC_PASSWORD" || {
+  echo 'VNC viewer opened without the persisted password file' >&2
+  exit 1
+}
+test "${3:-}" = '-ViewOnly=0' || {
+  echo 'VNC viewer opened without input enabled' >&2
+  exit 1
+}
+
+printf '<vncviewer|%s|>\n' "$*" >>"$FAKE_DOCKER_LOG"

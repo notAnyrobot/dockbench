@@ -58,6 +58,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     pkg-config \
     ripgrep \
     rsync \
+    sudo \
     tini \
     tk \
     tmux \
@@ -103,7 +104,7 @@ ENV HOME=/state/home \
     PATH=/state/uv/bin:/opt/uv/bin:/opt/conda/bin:/usr/local/cuda/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 
 RUN mkdir -p \
-    /Code \
+    /workspace \
     /state/home \
     /state/cache/uv \
     /state/cache/huggingface \
@@ -114,25 +115,45 @@ RUN mkdir -p \
     /state/uv/bin \
     /state/conda/pkgs
 
-COPY bin/verify-image /usr/local/bin/verify-image
+COPY assets/docker/bin/verify-image /usr/local/bin/verify-image
 
-WORKDIR /Code
+WORKDIR /workspace
 ENTRYPOINT ["/usr/bin/tini", "--"]
 CMD ["sleep", "infinity"]
 
 FROM core AS desktop
 
-RUN apt-get update && apt-get install -y --no-install-recommends \
+ARG MOZILLA_APT_KEY_SHA256=3ecc63922b7795eb23fdc449ff9396f9114cb3cf186d6f5b53ad4cc3ebfbb11f
+
+RUN install -d -m 0755 /etc/apt/keyrings \
+    && curl -fsSL https://packages.mozilla.org/apt/repo-signing-key.gpg \
+      -o /etc/apt/keyrings/packages.mozilla.org.asc \
+    && echo "${MOZILLA_APT_KEY_SHA256}  /etc/apt/keyrings/packages.mozilla.org.asc" \
+      | sha256sum -c - \
+    && printf '%s\n' \
+      'deb [signed-by=/etc/apt/keyrings/packages.mozilla.org.asc] https://packages.mozilla.org/apt mozilla main' \
+      > /etc/apt/sources.list.d/mozilla.list \
+    && printf '%s\n' \
+      'Package: *' \
+      'Pin: origin packages.mozilla.org' \
+      'Pin-Priority: 1000' \
+      > /etc/apt/preferences.d/mozilla \
+    && apt-get update && apt-get install -y --no-install-recommends \
     dbus-x11 \
+    firefox \
     fonts-dejavu-core \
+    fonts-liberation \
+    fonts-noto-cjk \
+    fonts-noto-color-emoji \
     tigervnc-common \
     tigervnc-standalone-server \
     tigervnc-tools \
     xauth \
+    xdg-utils \
     xfce4 \
     xfce4-terminal \
     && rm -rf /var/lib/apt/lists/*
 
-COPY bin/start-vnc /usr/local/bin/start-vnc
+COPY assets/docker/bin/start-vnc /usr/local/bin/start-vnc
 
 EXPOSE 5901

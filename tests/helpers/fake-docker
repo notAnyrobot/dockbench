@@ -1,0 +1,69 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+printf '<' >>"$FAKE_DOCKER_LOG"
+printf '|%s' "$@" >>"$FAKE_DOCKER_LOG"
+printf '|>\n' >>"$FAKE_DOCKER_LOG"
+
+case "${1:-} ${2:-}" in
+  "info --format")
+    if test "${FAKE_ROOTLESS:-0}" = 1; then
+      printf '%s\n' '["name=rootless"]'
+    else
+      printf '%s\n' '[]'
+    fi
+    ;;
+  "container inspect")
+    test -f "$FAKE_DOCKER_STATE" || exit 1
+    if [[ "$*" == *'{{.Image}}'* ]]; then
+      printf '%s\n' "${FAKE_CONTAINER_IMAGE_ID:-sha256:test-image}"
+    elif [[ "$*" == *'robotics-ws.launch-config'* ]]; then
+      printf '%s\n' "${FAKE_LAUNCH_CONFIG:-}"
+    else
+      cat "$FAKE_DOCKER_STATE"
+    fi
+    ;;
+  "image inspect") printf '%s\n' "${FAKE_IMAGE_ID:-sha256:test-image}" ;;
+  "buildx build") test "${FAKE_BUILD_FAIL:-0}" != 1 ;;
+  "save --output") : >"$3" ;;
+  "load --input") test -f "$3" ;;
+  "run -d")
+    printf '%s\n' running >"$FAKE_DOCKER_STATE"
+    printf '%s\n' test-container-id
+    ;;
+  "start "*) printf '%s\n' running >"$FAKE_DOCKER_STATE" ;;
+  "stop "*) printf '%s\n' exited >"$FAKE_DOCKER_STATE" ;;
+  "rm "*) rm -f "$FAKE_DOCKER_STATE" ;;
+  "exec -i")
+    cat >/dev/null
+    if [[ "$*" == *'vncpasswd -f'* ]]; then
+      mkdir -p "$(dirname "$FAKE_VNC_PASSWORD")"
+      : >"$FAKE_VNC_PASSWORD"
+    fi
+    ;;
+  "exec -it")
+    if [[ "$*" == *'vncpasswd'* ]]; then
+      mkdir -p "$(dirname "$FAKE_VNC_PASSWORD")"
+      : >"$FAKE_VNC_PASSWORD"
+    fi
+    ;;
+  "exec -d") : >"${FAKE_VNC_RUNNING}.starting" ;;
+  "exec --user")
+    if [[ "$*" == *'test -s /state/home/.vnc/passwd'* ]]; then
+      test -e "$FAKE_VNC_PASSWORD" || exit 1
+    elif [[ "$*" == *'tigervncconfig'* ]]; then
+      test "${FAKE_VNC_NEVER_READY:-0}" != 1 || exit 1
+      if test -e "${FAKE_VNC_RUNNING}.starting"; then
+        : >"$FAKE_VNC_RUNNING"
+        rm "${FAKE_VNC_RUNNING}.starting"
+      fi
+      test -e "$FAKE_VNC_RUNNING" || exit 1
+    elif [[ "$*" == *'vncserver -list'* ]]; then
+      test -e "$FAKE_VNC_RUNNING" && test "${FAKE_VNC_SESSION:-live}" != stale || exit 1
+    fi
+    ;;
+  *)
+    printf 'unexpected fake docker command: %s\n' "$*" >&2
+    exit 1
+    ;;
+esac

@@ -1,0 +1,35 @@
+[project]
+name = "docker-workstation-workbench"
+version = "0.1.0"
+description = "Loopback-only desktop Workbench for docker-ws"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+  "fastapi>=0.115,<1",
+  "uvicorn[standard]>=0.30,<1",
+]
+
+[project.scripts]
+docker-ws = "docker_ws.cli.main:main"
+
+[build-system]
+requires = ["hatchling>=1.26"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["docker_ws"]
+
+[dependency-groups]
+dev = ["httpx>=0.27", "pytest>=8", "pytest-asyncio>=0.24"]
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["tests/python"]
+# This ROS host exposes unrelated launch-testing plugins via its global Python
+# environment. Disable only those entry points; normal installed pytest plugins
+# (including pytest-asyncio) remain available.
+required_plugins = ["pytest-asyncio"]
+addopts = [
+  "-p", "no:launch_testing", "-p", "no:launch_ros",
+  "-p", "no:ament_pep257", "-p", "no:ament_xmllint",
+  "-p", "no:ament_copyright", "-p", "no:ament_flake8", "-p", "no:ament_lint",
+]

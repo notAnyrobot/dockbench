@@ -1,0 +1,13 @@
+[Unit]
+Description=Docker Workstation Workbench
+After=default.target
+
+[Service]
+Type=simple
+WorkingDirectory=__WORKBENCH_ROOT__
+ExecStart=__UV_EXECUTABLE__ run --project __WORKBENCH_ROOT__ docker-ws workbench
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=default.target

@@ -1,5 +1,7 @@
 *
-!Dockerfile
-!bin/
-!bin/start-vnc
-!bin/verify-image
+!assets/
+!assets/docker/
+!assets/docker/Dockerfile
+!assets/docker/bin/
+!assets/docker/bin/start-vnc
+!assets/docker/bin/verify-image

@@ -1,5 +1,9 @@
 .DS_Store
 .robotics-ws/
+.venv/
+.pytest_cache/
+__pycache__/
+*.tsbuildinfo
 node_modules/
 dist/
 .env

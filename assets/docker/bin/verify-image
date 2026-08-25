@@ -6,7 +6,7 @@ minimum_driver=580.65.06
 [[ "$(uname -m)" == x86_64 ]]
 [[ "$(dpkg --print-architecture)" == amd64 ]]
 
-for command in uv conda hf git nvidia-smi; do
+for command in uv conda hf git nvidia-smi sudo; do
   command -v "$command" >/dev/null
 done
 
@@ -15,8 +15,13 @@ conda --version
 hf --help >/dev/null
 git lfs version
 
-[[ -d /Code && -w /Code ]]
+[[ -d /workspace && -w /workspace ]]
 [[ -d /state && -w /state ]]
+
+[[ -n "$(fc-list :charset=4e2d family)" ]] || {
+  echo 'no installed font covers the CJK character U+4E2D' >&2
+  exit 1
+}
 
 while IFS= read -r driver; do
   first="$(printf '%s\n' "$minimum_driver" "$driver" | sort -V | head -n 1)"

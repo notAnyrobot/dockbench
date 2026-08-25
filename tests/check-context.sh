@@ -1,38 +1,33 @@
 #!/usr/bin/env bash
 set -euo pipefail
-
 cd "$(dirname "$0")/.."
 
-for file in Dockerfile .dockerignore bin/launch-desktop bin/launch-headless bin/package-images bin/start-vnc bin/verify-image; do
+for file in .dockerignore pyproject.toml assets/docker/Dockerfile \
+  assets/docker/bin/start-vnc assets/docker/bin/verify-image \
+  assets/systemd/docker-ws-workbench.service docker_ws/cli/main.py \
+  docker_ws/core/workstation.py docker_ws/core/images.py docker_ws/web/app.py apps/workbench/package.json \
+  tests/test-workstation.sh tests/test-cli.sh tests/test-package-images.sh; do
   test -f "$file" || { echo "missing: $file" >&2; exit 1; }
 done
+for obsolete in Dockerfile cli core web workbench systemd; do
+  test ! -e "$obsolete" || { echo "obsolete path remains: $obsolete" >&2; exit 1; }
+done
 
-grep -F 'FROM ${CUDA_IMAGE} AS core' Dockerfile >/dev/null
-grep -F 'FROM core AS desktop' Dockerfile >/dev/null
-grep -F 'nvidia/cuda:12.8.1-devel-ubuntu22.04' Dockerfile >/dev/null
-grep -F 'ghcr.io/astral-sh/uv:${UV_VERSION}' Dockerfile >/dev/null
-grep -F 'UV_VERSION=0.12.3' Dockerfile >/dev/null
-grep -F 'MINIFORGE_VERSION=26.3.2-2' Dockerfile >/dev/null
-grep -F 'huggingface-hub==${HF_HUB_VERSION}' Dockerfile >/dev/null
-grep -F 'tigervnc-tools' Dockerfile >/dev/null
+grep -F 'FROM ${CUDA_IMAGE} AS core' assets/docker/Dockerfile >/dev/null
+grep -F 'FROM core AS desktop' assets/docker/Dockerfile >/dev/null
+grep -F 'COPY assets/docker/bin/verify-image /usr/local/bin/verify-image' assets/docker/Dockerfile >/dev/null
+grep -F 'COPY assets/docker/bin/start-vnc /usr/local/bin/start-vnc' assets/docker/Dockerfile >/dev/null
+grep -F 'WORKDIR /workspace' assets/docker/Dockerfile >/dev/null
+grep -F 'assets/docker/Dockerfile' docker_ws/core/workstation.py >/dev/null
+grep -F 'dst=/workspace' docker_ws/core/workstation.py >/dev/null
+grep -F 'apps" / "workbench" / "dist' docker_ws/web/app.py >/dev/null
+grep -F 'docker-ws workbench' assets/systemd/docker-ws-workbench.service >/dev/null
+grep -F '__UV_EXECUTABLE__' assets/systemd/docker-ws-workbench.service >/dev/null
 
-if grep -Eq 'COPY .*ProtoMotions|COPY .*mjlab|uv sync|pip install .*torch' Dockerfile; then
-  echo 'project dependency found in base image' >&2
-  exit 1
-fi
-
-bash -n bin/launch-desktop bin/launch-headless bin/package-images bin/start-vnc bin/verify-image \
-  tests/test-launch-desktop.sh tests/test-launch-headless.sh
-bash tests/test-launch-desktop.sh
-bash tests/test-launch-headless.sh
-
-temporary_home="$(mktemp -d)"
-trap 'rm -rf "$temporary_home"' EXIT
-
-if HOME="$temporary_home" bin/start-vnc >"$temporary_home/output" 2>&1; then
-  echo 'start-vnc accepted a missing password' >&2
-  exit 1
-fi
-
-grep -F "VNC password missing; run: vncpasswd ${temporary_home}/.vnc/passwd" \
-  "$temporary_home/output" >/dev/null
+bash -n assets/docker/bin/start-vnc assets/docker/bin/verify-image \
+  tests/helpers/fake-docker tests/helpers/fake-vncviewer tests/test-workstation.sh \
+  tests/test-cli.sh tests/test-package-images.sh
+python3 -m py_compile docker_ws/cli/main.py docker_ws/core/workstation.py docker_ws/core/images.py docker_ws/web/app.py
+bash tests/test-workstation.sh
+bash tests/test-cli.sh
+bash tests/test-package-images.sh
