@@ -101,3 +101,17 @@ def test_desktop_contract_exposes_desktop_endpoint(tmp_path):
     endpoint = ws.ensure_desktop("password")
     assert (endpoint.host, endpoint.port) == ("127.0.0.1", 5901)
     assert any(command[:2] == ["exec", "-d"] for command in fake.commands)
+
+
+def test_desktop_contract_restores_host_user_and_secure_vnc_paths(tmp_path):
+    fake = FakeDocker(config(tmp_path)); ws = Workstation(fake.config, fake, FakeInventory(desktop=True))
+    ws.start(image="test:image")
+    provisioning = "\n".join(payload or "" for payload in fake.inputs)
+    assert "NOPASSWD: ALL" in provisioning and 'ownership_marker="/state/.owner-${requested_uid}-${requested_gid}"' in provisioning
+    ws.enter()
+    assert any(command[:2] == ["exec", "-it"] and "1234:5678" in command and "HOME=/state/home" in command for command in fake.commands)
+    ws.ensure_desktop("password")
+    assert any("AcceptPointerEvents" in " ".join(command) and "AcceptKeyEvents" in " ".join(command) for command in fake.commands)
+    ws.reset_vnc_password("new-pass")
+    reset = next(command for command in fake.commands if "temporary_file" in " ".join(command))
+    assert reset[:2] == ["exec", "-i"]

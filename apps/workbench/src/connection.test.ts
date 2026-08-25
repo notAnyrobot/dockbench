@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { applyStatusToDesktop, desktopButtonLabel, disconnectState, fullscreenButtonLabel, passwordForConnection, workstationButtonLabel } from "./connection";
+import { applyStatusToDesktop, desktopButtonLabel, disconnectState, fullscreenButtonLabel, passwordForConnection, workstationActionEnabled, workstationButtonLabel } from "./connection";
 
 describe("desktop connection state", () => {
   it("keeps a connected or connecting canvas visible while status refreshes", () => {
@@ -26,6 +26,11 @@ describe("desktop connection state", () => {
   it("turns the workstation action into stop while running", () => {
     expect(workstationButtonLabel(false)).toBe("Start workstation");
     expect(workstationButtonLabel(true)).toBe("Stop workstation");
+  });
+
+  it("keeps Start available for a stopped managed container but not an absent one", () => {
+    expect(workstationActionEnabled("stopped")).toBe(true);
+    expect(workstationActionEnabled("absent")).toBe(false);
   });
 
   it("turns the fullscreen action into exit while active", () => {

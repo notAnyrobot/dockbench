@@ -16,6 +16,11 @@ export function workstationButtonLabel(running: boolean): "Start workstation" | 
   return running ? "Stop workstation" : "Start workstation";
 }
 
+/** An existing stopped container can restart; an absent one requires launch setup. */
+export function workstationActionEnabled(state: DesktopState): boolean {
+  return state !== "absent" && state !== "loading" && state !== "unavailable";
+}
+
 export function fullscreenButtonLabel(active: boolean): "Enter fullscreen" | "Exit fullscreen" {
   return active ? "Exit fullscreen" : "Enter fullscreen";
 }
