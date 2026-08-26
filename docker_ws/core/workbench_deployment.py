@@ -18,6 +18,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Mapping
 
+from docker_ws.core.defaults import default_workspace
 from docker_ws.core.errors import WorkstationError
 
 
@@ -26,7 +27,7 @@ class DeploymentError(WorkstationError):
 
 
 _RUNTIME_ENVIRONMENT = frozenset({
-    "ROBOTICS_WS_CODE_ROOT", "ROBOTICS_WS_STATE_ROOT", "ROBOTICS_WS_DOCKER",
+    "ROBOTICS_WS_WORKSPACE", "ROBOTICS_WS_CODE_ROOT", "ROBOTICS_WS_STATE_ROOT", "ROBOTICS_WS_DOCKER",
     "ROBOTICS_WS_VNC_PORT", "ROBOTICS_WS_SHM_SIZE", "ROBOTICS_WS_HOST_UID",
     "ROBOTICS_WS_HOST_GID", "ROBOTICS_WS_HOST_USER", "ROBOTICS_WS_DESKTOP_IMAGE",
     "ROBOTICS_WS_DESKTOP_NAME", "ROBOTICS_WS_VNCVIEWER",
@@ -44,7 +45,7 @@ class DeploymentOptions:
 
     repository_root: Path
     port: int = 8787
-    code_root: Path | None = None
+    workspace: Path | None = None
     state_root: Path | None = None
     docker_command: str | None = None
     config_home: Path | None = None
@@ -107,7 +108,7 @@ class WorkbenchDeployment:
         if not 1 <= options.port <= 65535:
             raise DeploymentError("Workbench port must be between 1 and 65535")
         self.options = DeploymentOptions(
-            repository_root=root, port=options.port, code_root=options.code_root,
+            repository_root=root, port=options.port, workspace=options.workspace,
             state_root=options.state_root, docker_command=options.docker_command,
             config_home=options.config_home, state_home=options.state_home,
             health_timeout_seconds=options.health_timeout_seconds,
@@ -127,8 +128,13 @@ class WorkbenchDeployment:
 
     def _snapshot_environment(self) -> dict[str, str]:
         environment = {key: os.environ[key] for key in _RUNTIME_ENVIRONMENT if key in os.environ}
-        if self.options.code_root is not None:
-            environment["ROBOTICS_WS_CODE_ROOT"] = str(self.options.code_root.expanduser())
+        workspace = self.options.workspace or Path(
+            environment.get("ROBOTICS_WS_WORKSPACE")
+            or environment.get("ROBOTICS_WS_CODE_ROOT")
+            or default_workspace()
+        )
+        environment.pop("ROBOTICS_WS_CODE_ROOT", None)
+        environment["ROBOTICS_WS_WORKSPACE"] = str(workspace.expanduser().resolve())
         if self.options.state_root is not None:
             environment["ROBOTICS_WS_STATE_ROOT"] = str(self.options.state_root.expanduser())
         if self.options.docker_command is not None:
@@ -157,21 +163,21 @@ class WorkbenchDeployment:
             if temp.exists():
                 temp.unlink(missing_ok=True)
 
-    def _write_runtime_config(self) -> dict[str, str]:
+    def _write_runtime_config(self, environment: Mapping[str, str] | None = None) -> dict[str, str]:
         self._mkdir_private(self.config_dir)
         self._mkdir_private(self.state_dir)
-        environment = self._snapshot_environment()
+        values = dict(environment) if environment is not None else self._snapshot_environment()
         config = {
             "schema_version": 1,
             "repository_root": str(self.options.repository_root),
             "port": self.options.port,
-            "environment": environment,
+            "environment": values,
         }
         self._write_private(self.config_path, json.dumps(config, sort_keys=True) + "\n")
         # EnvironmentFile uses shell-like quoting.  Values in this application
         # are paths/commands; JSON quoting safely handles whitespace and quotes.
-        self._write_private(self.environment_path, "".join(f"{key}={json.dumps(value)}\n" for key, value in sorted(environment.items())))
-        return environment
+        self._write_private(self.environment_path, "".join(f"{key}={json.dumps(value)}\n" for key, value in sorted(values.items())))
+        return values
 
     def _require_build_tools(self) -> tuple[str, str]:
         uv, node, npm = shutil.which("uv"), shutil.which("node"), shutil.which("npm")
@@ -279,9 +285,15 @@ class WorkbenchDeployment:
         raise DeploymentError(f"Workbench did not become healthy at {self.url}: {last_error}. {diagnostics}")
 
     def deploy(self) -> DeploymentResult:
+        environment = self._snapshot_environment()
+        workspace = Path(environment["ROBOTICS_WS_WORKSPACE"])
+        if not workspace.is_dir():
+            raise DeploymentError(
+                f"workspace does not exist: {workspace}; create it or pass `--workspace PATH`"
+            )
         uv, npm = self._require_build_tools()
         self._build(uv, npm)
-        environment = self._write_runtime_config()
+        self._write_runtime_config(environment)
         manager = self._systemd_probe()
         if manager == "available":
             # A new systemd unit and an old fallback must never own the same

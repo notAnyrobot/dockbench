@@ -75,11 +75,14 @@ resumes that same container and writable filesystem; it does not create a fresh
 container. Use remove/create or an explicit replacement when a fresh container
 is required.
 
-By default, `docker-ws` mounts the host's `~/Code` at `/workspace` and preserves
-state at `.robotics-ws`. Set `ROBOTICS_WS_CODE_ROOT` to mount a different host
-directory. `start` does not configure or run VNC, so it works for shell-only use
-without a VNC password. `vnc` provisions a password when needed, starts VNC,
-and opens the viewer. Run
+By default, `docker-ws` mounts the host's `~/workspace` at `/workspace`. On HPC
+or workstation hosts with `/data/$USER`, it instead uses
+`/data/$USER/workspace`. Set `ROBOTICS_WS_WORKSPACE` to mount a different host
+directory; existing `ROBOTICS_WS_CODE_ROOT` configurations remain compatible.
+The selected workspace must exist before deploying or starting a container.
+`start` does not configure or run VNC, so it works for shell-only use without a
+VNC password. `vnc` provisions a password when needed, starts VNC, and opens
+the viewer. Run
 `uv run docker-ws --help` for all operations. Set `ROBOTICS_WS_VNC_PASSWORD` only in the environment
 when provisioning a password—never store it in this repository.
 

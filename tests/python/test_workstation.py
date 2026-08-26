@@ -53,6 +53,28 @@ def config(tmp_path: Path, image=None):
     return WorkstationConfig(tmp_path, "docker", code, tmp_path / ".robotics-ws", "8g", 1234, 5678, "robot", image, "robot-ws", 5901, "vncviewer", "rootful", 1234, 5678)
 
 
+@pytest.mark.parametrize(
+    ("environment", "expected"),
+    [
+        ({"ROBOTICS_WS_WORKSPACE": "workspace", "ROBOTICS_WS_CODE_ROOT": "legacy"}, "workspace"),
+        ({"ROBOTICS_WS_CODE_ROOT": "legacy"}, "legacy"),
+    ],
+)
+def test_config_prefers_workspace_environment_and_accepts_legacy_code_root(tmp_path, monkeypatch, environment, expected):
+    for directory in {"workspace", "legacy"}:
+        (tmp_path / directory).mkdir()
+    monkeypatch.delenv("ROBOTICS_WS_WORKSPACE", raising=False)
+    monkeypatch.delenv("ROBOTICS_WS_CODE_ROOT", raising=False)
+    for name, value in environment.items():
+        monkeypatch.setenv(name, str(tmp_path / value))
+    monkeypatch.setattr("docker_ws.core.workstation.shutil.which", lambda command: f"/usr/bin/{command}")
+    monkeypatch.setattr("docker_ws.core.workstation.SubprocessDockerRunner.run", lambda *args, **kwargs: "[]")
+
+    result = WorkstationConfig.from_environment(tmp_path)
+
+    assert result.workspace_root == tmp_path / expected
+
+
 def test_creation_defaults_to_desktop_image_and_all_gpus(tmp_path):
     fake = FakeDocker(config(tmp_path, DEFAULT_IMAGE)); ws = Workstation(fake.config, fake, FakeInventory())
     result = ws.start()

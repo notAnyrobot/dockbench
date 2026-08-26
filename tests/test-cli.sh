@@ -15,6 +15,10 @@ grep -F 'connect' "$temporary_dir/workbench-help" >/dev/null
 grep -F 'serve' "$temporary_dir/workbench-help" >/dev/null
 grep -F 'start' "$temporary_dir/workbench-help" >/dev/null
 
+uv run --no-sync docker-ws workbench deploy --help >"$temporary_dir/deploy-help"
+grep -F -- '--workspace' "$temporary_dir/deploy-help" >/dev/null
+! grep -F -- '--code-root' "$temporary_dir/deploy-help" >/dev/null
+
 uv run --no-sync docker-ws image recipe list >"$temporary_dir/recipes"
 grep -F $'android-ws\tv1\tandroid-ws:u22.04-cu12.8-v1' "$temporary_dir/recipes" >/dev/null
 

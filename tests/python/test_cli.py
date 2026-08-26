@@ -27,7 +27,7 @@ def test_workbench_command_group_preserves_bare_serve_and_dispatches_actions(mon
 
     assert main.main(["workbench"]) == 0
     assert main.main(["workbench", "serve", "--port", "9000", "--config", "/tmp/workbench.json"]) == 0
-    assert main.main(["workbench", "deploy", "--port", "9001", "--code-root", "/code",
+    assert main.main(["workbench", "deploy", "--port", "9001", "--workspace", "/workspace",
                       "--state-root", "/state", "--docker-command", "podman"]) == 0
     assert main.main(["workbench", "connect", "hpc", "--local-port", "9002",
                       "--remote-port", "9001", "--no-open"]) == 0
@@ -38,7 +38,7 @@ def test_workbench_command_group_preserves_bare_serve_and_dispatches_actions(mon
     assert calls == [
         ("serve", (8787, None)),
         ("serve", (9000, "/tmp/workbench.json")),
-        ("deploy", (9001, "/code", "/state", "podman")),
+        ("deploy", (9001, "/workspace", "/state", "podman")),
         ("connect", ("hpc", 9002, 9001, False)),
         ("status", ("start",)),
         ("status", ("status",)),
@@ -49,6 +49,11 @@ def test_workbench_command_group_preserves_bare_serve_and_dispatches_actions(mon
 def test_workbench_ports_are_validated_by_parser():
     with pytest.raises(SystemExit):
         main.parser().parse_args(["workbench", "connect", "hpc", "--remote-port", "70000"])
+
+
+def test_workbench_deploy_rejects_removed_code_root_option():
+    with pytest.raises(SystemExit):
+        main.parser().parse_args(["workbench", "deploy", "--code-root", "/old"])
 
 
 def test_start_parser_accepts_image_repeated_gpus_all_replace_and_bare_restart():

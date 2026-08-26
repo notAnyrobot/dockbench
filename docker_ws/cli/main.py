@@ -138,22 +138,22 @@ def _verify_image(image: str) -> int:
         return _fail(str(exc))
 
 
-def _deployment(port: int = DEFAULT_WORKBENCH_PORT, code_root: str | None = None,
+def _deployment(port: int = DEFAULT_WORKBENCH_PORT, workspace: str | None = None,
                 state_root: str | None = None, docker_command: str | None = None) -> WorkbenchDeployment:
     return WorkbenchDeployment(DeploymentOptions(
         repository_root=REPOSITORY_ROOT,
         port=port,
-        code_root=Path(code_root).expanduser() if code_root else None,
+        workspace=Path(workspace).expanduser() if workspace else None,
         state_root=Path(state_root).expanduser() if state_root else None,
         docker_command=docker_command,
     ))
 
 
-def _deploy_workbench(port: int = DEFAULT_WORKBENCH_PORT, code_root: str | None = None,
+def _deploy_workbench(port: int = DEFAULT_WORKBENCH_PORT, workspace: str | None = None,
                       state_root: str | None = None, docker_command: str | None = None) -> int:
     try:
         print("Building and deploying Docker Workbench…")
-        result = _deployment(port, code_root, state_root, docker_command).deploy()
+        result = _deployment(port, workspace, state_root, docker_command).deploy()
         print(f"Docker Workbench deployed with {result.manager}: {result.url}")
         if result.log_path:
             print(f"Log: {result.log_path}")
@@ -232,7 +232,7 @@ def parser() -> argparse.ArgumentParser:
     serve.add_argument("--config", help="Deployment runtime configuration file.")
     deploy = workbench_actions.add_parser("deploy", help="Build and deploy Workbench on this Docker host.")
     deploy.add_argument("--port", type=_port, default=DEFAULT_WORKBENCH_PORT)
-    deploy.add_argument("--code-root", help="Host project directory mounted into managed containers.")
+    deploy.add_argument("--workspace", help="Host workspace mounted at /workspace; defaults to /data/$USER/workspace on HPC or ~/workspace locally.")
     deploy.add_argument("--state-root", help="Host directory for persistent Workstation state.")
     deploy.add_argument("--docker-command", help="Docker-compatible command used on the remote host.")
     connect = workbench_actions.add_parser("connect", help="Open a local SSH tunnel to a deployed Workbench.")
@@ -323,7 +323,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         if action == "serve":
             return _workbench(getattr(arguments, "port", DEFAULT_WORKBENCH_PORT), getattr(arguments, "config", None))
         if action == "deploy":
-            return _deploy_workbench(arguments.port, arguments.code_root, arguments.state_root, arguments.docker_command)
+            return _deploy_workbench(arguments.port, arguments.workspace, arguments.state_root, arguments.docker_command)
         if action == "connect":
             return _connect_workbench(arguments.ssh_host, arguments.local_port, arguments.remote_port, not arguments.no_open)
         return _workbench_status(action)

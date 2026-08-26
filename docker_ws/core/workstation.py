@@ -15,7 +15,7 @@ from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 from typing import Iterable, Protocol
 
-from docker_ws.core.defaults import DEFAULT_IMAGE
+from docker_ws.core.defaults import DEFAULT_IMAGE, default_workspace
 from docker_ws.core.errors import WorkstationError, WorkstationGPUConflict, WorkstationRebuildRequired, WorkstationReplaceRequired
 from docker_ws.core.host_inventory import HostInventory
 
@@ -37,23 +37,25 @@ class SubprocessDockerRunner:
 
 @dataclass(frozen=True)
 class WorkstationConfig:
-    repository_root: Path; docker_command: str; code_root: Path; state_root: Path; shm_size: str
+    repository_root: Path; docker_command: str; workspace_root: Path; state_root: Path; shm_size: str
     host_uid: int; host_gid: int; host_user: str; image: str | None; container_name: str
     vnc_port: int; vncviewer_command: str; docker_mode: str; container_uid: int; container_gid: int
     dynamic_vnc_port: bool = False
     @property
-    def launch_config(self) -> str: return "|".join((str(self.code_root), str(self.state_root), self.shm_size, str(self.host_uid), str(self.host_gid), self.docker_mode, str(self.vnc_port)))
+    def launch_config(self) -> str: return "|".join((str(self.workspace_root), str(self.state_root), self.shm_size, str(self.host_uid), str(self.host_gid), self.docker_mode, str(self.vnc_port)))
     @classmethod
     def from_environment(cls, repository_root: Path | None = None) -> "WorkstationConfig":
         env = os.environ; root = repository_root or Path(__file__).resolve().parents[2]
-        code_root = Path(env.get("ROBOTICS_WS_CODE_ROOT", str(Path.home() / "Code"))).expanduser(); state_root = Path(env.get("ROBOTICS_WS_STATE_ROOT", str(code_root.parent / ".robotics-ws"))).expanduser(); port = env.get("ROBOTICS_WS_VNC_PORT", "5901")
+        workspace_value = env.get("ROBOTICS_WS_WORKSPACE") or env.get("ROBOTICS_WS_CODE_ROOT")
+        workspace_root = Path(workspace_value).expanduser().resolve() if workspace_value else default_workspace()
+        state_root = Path(env.get("ROBOTICS_WS_STATE_ROOT", str(workspace_root.parent / ".robotics-ws"))).expanduser(); port = env.get("ROBOTICS_WS_VNC_PORT", "5901")
         if not re.fullmatch(r"[1-9][0-9]*", port): raise WorkstationError(f"VNC port must be a positive integer: {port}")
         docker = env.get("ROBOTICS_WS_DOCKER", "docker")
         if shutil.which(docker) is None: raise WorkstationError(f"Docker command not found: {docker}")
-        if not code_root.is_dir(): raise WorkstationError(f"code root does not exist: {code_root}")
+        if not workspace_root.is_dir(): raise WorkstationError(f"workspace does not exist: {workspace_root}")
         security = SubprocessDockerRunner(docker).run(["info", "--format", "{{json .SecurityOptions}}"], capture=True); rootless = "rootless" in security
         uid = int(env.get("ROBOTICS_WS_HOST_UID", str(os.getuid()))); gid = int(env.get("ROBOTICS_WS_HOST_GID", str(os.getgid())))
-        return cls(root, docker, code_root, state_root, env.get("ROBOTICS_WS_SHM_SIZE", "32g"), uid, gid, env.get("ROBOTICS_WS_HOST_USER", "user"), env.get("ROBOTICS_WS_DESKTOP_IMAGE", DEFAULT_IMAGE), env.get("ROBOTICS_WS_DESKTOP_NAME", "docker-ws"), int(port), env.get("ROBOTICS_WS_VNCVIEWER", "vncviewer"), "rootless" if rootless else "rootful", 0 if rootless else uid, 0 if rootless else gid)
+        return cls(root, docker, workspace_root, state_root, env.get("ROBOTICS_WS_SHM_SIZE", "32g"), uid, gid, env.get("ROBOTICS_WS_HOST_USER", "user"), env.get("ROBOTICS_WS_DESKTOP_IMAGE", DEFAULT_IMAGE), env.get("ROBOTICS_WS_DESKTOP_NAME", "docker-ws"), int(port), env.get("ROBOTICS_WS_VNCVIEWER", "vncviewer"), "rootless" if rootless else "rootful", 0 if rootless else uid, 0 if rootless else gid)
 
 
 @dataclass(frozen=True)
@@ -158,7 +160,7 @@ class Workstation:
         c = self.config; c.state_root.mkdir(parents=True, exist_ok=True)
         # Never force a platform for an arbitrary local image: Docker has
         # already resolved the image's locally available architecture.
-        args = ["run", "-d", "--name", c.container_name, "--hostname", c.container_name, "--user", "root", "--shm-size", c.shm_size, "--restart", "unless-stopped", "--label", "docker-ws.managed=true", "--label", f"docker-ws.state-root={c.state_root}", "--label", f"docker-ws.launch-spec={spec.label_value()}", "--label", f"docker-ws.image-id={spec.image_id}", "--label", f"docker-ws.image-ref={spec.image_ref}", "--label", f"docker-ws.gpus={','.join(spec.gpu_uuids)}", "--label", f"robotics-ws.launch-config={c.launch_config}", "--mount", f"type=bind,src={c.code_root},dst=/workspace", "--mount", f"type=bind,src={c.state_root},dst=/state"]
+        args = ["run", "-d", "--name", c.container_name, "--hostname", c.container_name, "--user", "root", "--shm-size", c.shm_size, "--restart", "unless-stopped", "--label", "docker-ws.managed=true", "--label", f"docker-ws.state-root={c.state_root}", "--label", f"docker-ws.launch-spec={spec.label_value()}", "--label", f"docker-ws.image-id={spec.image_id}", "--label", f"docker-ws.image-ref={spec.image_ref}", "--label", f"docker-ws.gpus={','.join(spec.gpu_uuids)}", "--label", f"robotics-ws.launch-config={c.launch_config}", "--mount", f"type=bind,src={c.workspace_root},dst=/workspace", "--mount", f"type=bind,src={c.state_root},dst=/state"]
         if spec.gpu_uuids: args += ["--gpus", f"device={','.join(spec.gpu_uuids)}"]
         if spec.desktop_capable:
             # Fleet containers use Docker's ephemeral host ports.  This makes

@@ -27,6 +27,9 @@ grep -F 'FROM core AS desktop' assets/images/android-ws/Dockerfile.android-ws-v1
 grep -F 'WORKDIR /workspace' assets/images/android-ws/Dockerfile.android-ws-v1 >/dev/null
 grep -F 'Dockerfile.android-ws-v1' docker_ws/core/workstation.py >/dev/null
 grep -F 'dst=/workspace' docker_ws/core/workstation.py >/dev/null
+grep -F 'ROBOTICS_WS_WORKSPACE' docker_ws/core/workstation.py >/dev/null
+grep -F -- '--workspace' docker_ws/cli/main.py >/dev/null
+! grep -F -- '--code-root' docker_ws/cli/main.py >/dev/null
 grep -F 'apps" / "workbench" / "dist' docker_ws/web/app.py >/dev/null
 grep -F 'docker-ws workbench' assets/systemd/docker-ws-workbench.service >/dev/null
 grep -F '__UV_EXECUTABLE__' assets/systemd/docker-ws-workbench.service >/dev/null

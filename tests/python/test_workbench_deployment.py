@@ -25,18 +25,32 @@ def _deployment(tmp_path: Path) -> WorkbenchDeployment:
 
 def test_runtime_config_is_allowlisted_and_never_persists_vnc_password(tmp_path, monkeypatch):
     deployment = _deployment(tmp_path)
-    monkeypatch.setenv("ROBOTICS_WS_CODE_ROOT", "/cluster/Code")
+    monkeypatch.setenv("ROBOTICS_WS_WORKSPACE", "/cluster/workspace")
     monkeypatch.setenv("ROBOTICS_WS_VNC_PASSWORD", "do-not-save")
     monkeypatch.setenv("UNRELATED", "also-do-not-save")
     values = deployment._write_runtime_config()
 
     persisted = json.loads(deployment.config_path.read_text())
-    assert values == {"ROBOTICS_WS_CODE_ROOT": "/cluster/Code"}
+    assert values == {"ROBOTICS_WS_WORKSPACE": "/cluster/workspace"}
     assert persisted["environment"] == values
     assert "VNC_PASSWORD" not in deployment.environment_path.read_text()
     assert "UNRELATED" not in deployment.config_path.read_text()
     assert load_runtime_config(deployment.config_path) == values
     assert deployment.config_path.stat().st_mode & 0o777 == 0o600
+
+
+def test_runtime_config_loads_legacy_code_root_for_existing_deployments(tmp_path):
+    config = tmp_path / "config.json"
+    config.write_text(json.dumps({"environment": {"ROBOTICS_WS_CODE_ROOT": "/legacy/Code"}}))
+
+    assert load_runtime_config(config) == {"ROBOTICS_WS_CODE_ROOT": "/legacy/Code"}
+
+
+def test_new_deployment_migrates_legacy_code_root_to_workspace(tmp_path, monkeypatch):
+    deployment = _deployment(tmp_path)
+    monkeypatch.setenv("ROBOTICS_WS_CODE_ROOT", "/legacy/Code")
+
+    assert deployment._snapshot_environment() == {"ROBOTICS_WS_WORKSPACE": "/legacy/Code"}
 
 
 def test_runtime_config_rejects_arbitrary_environment_keys(tmp_path):
@@ -58,6 +72,9 @@ def test_systemd_probe_falls_back_only_when_user_bus_is_unavailable(monkeypatch)
 
 def test_deploy_builds_before_install_and_systemd_unit_uses_serve(tmp_path, monkeypatch):
     deployment = _deployment(tmp_path)
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    monkeypatch.setenv("ROBOTICS_WS_WORKSPACE", str(workspace))
     commands = []
 
     monkeypatch.setattr(deployment, "_require_build_tools", lambda: ("/bin/uv", "/bin/npm"))
@@ -76,6 +93,15 @@ def test_deploy_builds_before_install_and_systemd_unit_uses_serve(tmp_path, monk
     assert "docker-ws workbench serve --port 8787 --config" in unit
     assert "__WORKBENCH_" not in unit
     assert result.manager == "systemd"
+
+
+def test_deploy_rejects_missing_workspace_before_build(tmp_path, monkeypatch):
+    deployment = _deployment(tmp_path)
+    monkeypatch.setenv("ROBOTICS_WS_WORKSPACE", str(tmp_path / "missing"))
+    monkeypatch.setattr(deployment, "_require_build_tools", lambda: pytest.fail("build preflight should not run"))
+
+    with pytest.raises(DeploymentError, match=r"workspace does not exist: .*--workspace PATH"):
+        deployment.deploy()
 
 
 def test_systemd_unit_treats_uv_sigterm_exit_as_clean():
@@ -149,6 +175,9 @@ def test_status_uses_saved_custom_port_after_a_new_cli_invocation(tmp_path, monk
 
 def test_fallback_health_failure_stops_process_and_removes_metadata(tmp_path, monkeypatch):
     deployment = _deployment(tmp_path)
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    monkeypatch.setenv("ROBOTICS_WS_WORKSPACE", str(workspace))
     deployment._mkdir_private(deployment.state_dir)
     metadata = deployment._installation_metadata("process", 77)
     metadata["process_identity"] = 2

@@ -17,7 +17,7 @@ run_ws() {
   FAKE_DOCKER_LOG="$temporary_dir/docker.log" FAKE_DOCKER_STATE="$temporary_dir/docker.state" \
   FAKE_LAUNCH_CONFIG="$launch_config" FAKE_VNC_PASSWORD="$vnc_password_file" \
   FAKE_VNC_RUNNING="$temporary_dir/vnc-running" ROBOTICS_WS_DOCKER="$fake_docker" \
-  ROBOTICS_WS_CODE_ROOT="$code_root" ROBOTICS_WS_STATE_ROOT="$state_root" \
+  ROBOTICS_WS_WORKSPACE="$code_root" ROBOTICS_WS_STATE_ROOT="$state_root" \
   ROBOTICS_WS_SHM_SIZE=8g ROBOTICS_WS_HOST_UID=1234 ROBOTICS_WS_HOST_GID=5678 \
   ROBOTICS_WS_HOST_USER=test-user uv run --no-sync docker-ws "$@"
 }
