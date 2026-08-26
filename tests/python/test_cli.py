@@ -11,23 +11,42 @@ def test_workbench_preflight_explains_how_to_build_assets(tmp_path, monkeypatch,
     assert "npm run --prefix apps/workbench build" in output
 
 
-def test_service_unit_substitutes_absolute_uv_path(tmp_path, monkeypatch):
-    unit_dir = tmp_path / "config"
+def test_legacy_service_install_delegates_to_workbench_deploy(monkeypatch):
     calls = []
-    monkeypatch.setenv("XDG_CONFIG_HOME", str(unit_dir))
-    monkeypatch.setattr(main.shutil, "which", lambda command: "/opt/tools/uv" if command == "uv" else None)
-    monkeypatch.setattr(main.subprocess, "run", lambda command, check: calls.append(command))
-    assert main._install_service() == 0
-    unit = (unit_dir / "systemd/user/docker-ws-workbench.service").read_text()
-    assert "ExecStart=/opt/tools/uv run --project" in unit
-    assert "__UV_EXECUTABLE__" not in unit
-    assert calls == [["systemctl", "--user", "daemon-reload"], ["systemctl", "--user", "enable", "--now", "docker-ws-workbench.service"]]
+    monkeypatch.setattr(main, "_deploy_workbench", lambda *args: calls.append(args) or 0)
+    assert main.main(["service", "install"]) == 0
+    assert calls == [()]
 
 
-def test_service_install_reports_missing_uv(monkeypatch, capsys):
-    monkeypatch.setattr(main.shutil, "which", lambda command: None)
-    assert main._install_service() == 1
-    assert "uv command not found" in capsys.readouterr().err
+def test_workbench_command_group_preserves_bare_serve_and_dispatches_actions(monkeypatch):
+    calls = []
+    monkeypatch.setattr(main, "_workbench", lambda *args: calls.append(("serve", args)) or 0)
+    monkeypatch.setattr(main, "_deploy_workbench", lambda *args: calls.append(("deploy", args)) or 0)
+    monkeypatch.setattr(main, "_connect_workbench", lambda *args: calls.append(("connect", args)) or 0)
+    monkeypatch.setattr(main, "_workbench_status", lambda *args: calls.append(("status", args)) or 0)
+
+    assert main.main(["workbench"]) == 0
+    assert main.main(["workbench", "serve", "--port", "9000", "--config", "/tmp/workbench.json"]) == 0
+    assert main.main(["workbench", "deploy", "--port", "9001", "--code-root", "/code",
+                      "--state-root", "/state", "--docker-command", "podman"]) == 0
+    assert main.main(["workbench", "connect", "hpc", "--local-port", "9002",
+                      "--remote-port", "9001", "--no-open"]) == 0
+    assert main.main(["workbench", "status"]) == 0
+    assert main.main(["workbench", "stop"]) == 0
+
+    assert calls == [
+        ("serve", (8787, None)),
+        ("serve", (9000, "/tmp/workbench.json")),
+        ("deploy", (9001, "/code", "/state", "podman")),
+        ("connect", ("hpc", 9002, 9001, False)),
+        ("status", ("status",)),
+        ("status", ("stop",)),
+    ]
+
+
+def test_workbench_ports_are_validated_by_parser():
+    with pytest.raises(SystemExit):
+        main.parser().parse_args(["workbench", "connect", "hpc", "--remote-port", "70000"])
 
 
 def test_start_parser_accepts_image_repeated_gpus_all_replace_and_bare_restart():

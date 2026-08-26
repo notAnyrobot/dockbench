@@ -5,7 +5,8 @@ After=default.target
 [Service]
 Type=simple
 WorkingDirectory=__WORKBENCH_ROOT__
-ExecStart=__UV_EXECUTABLE__ run --project __WORKBENCH_ROOT__ docker-ws workbench
+EnvironmentFile=__WORKBENCH_ENV_FILE__
+ExecStart=__UV_EXECUTABLE__ run --frozen --project __WORKBENCH_ROOT__ docker-ws workbench serve --port __WORKBENCH_PORT__ --config __WORKBENCH_CONFIG__
 Restart=on-failure
 RestartSec=3
 

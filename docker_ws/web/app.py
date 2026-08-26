@@ -258,6 +258,17 @@ def create_app(workstation: Workstation | None = None, fleet: Any | None = None,
         })
         return response
 
+    @app.get("/api/health")
+    async def health() -> dict[str, str]:
+        """Report that the HTTP server is ready without contacting Docker.
+
+        Deployment and SSH-tunnel clients use this endpoint as their readiness
+        probe.  It deliberately avoids the workstation and fleet services so a
+        reachable Workbench can still report ready while Docker is stopped or
+        temporarily unavailable.
+        """
+        return {"status": "ok"}
+
     def ws() -> Workstation:
         return app.state.workstation or Workstation()
 

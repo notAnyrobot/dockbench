@@ -6,8 +6,11 @@ for file in .dockerignore pyproject.toml assets/images/android-ws/recipe.json \
   assets/images/android-ws/Dockerfile.android-ws-v1 \
   assets/systemd/docker-ws-workbench.service docker_ws/cli/main.py \
   docker_ws/core/workstation.py docker_ws/core/images.py docker_ws/core/recipes.py \
-  docker_ws/core/image_builder.py docker_ws/core/image_verifier.py docker_ws/web/app.py apps/workbench/package.json \
-  tests/python/test_recipes.py tests/test-workstation.sh tests/test-cli.sh tests/test-package-images.sh; do
+  docker_ws/core/image_builder.py docker_ws/core/image_verifier.py \
+  docker_ws/core/workbench_deployment.py docker_ws/core/workbench_connection.py \
+  docker_ws/web/app.py apps/workbench/package.json tests/python/test_recipes.py \
+  tests/python/test_workbench_deployment.py tests/python/test_workbench_connection.py \
+  tests/test-workstation.sh tests/test-cli.sh tests/test-package-images.sh; do
   test -f "$file" || { echo "missing: $file" >&2; exit 1; }
 done
 for obsolete in Dockerfile cli core web workbench systemd; do
@@ -25,11 +28,16 @@ grep -F 'dst=/workspace' docker_ws/core/workstation.py >/dev/null
 grep -F 'apps" / "workbench" / "dist' docker_ws/web/app.py >/dev/null
 grep -F 'docker-ws workbench' assets/systemd/docker-ws-workbench.service >/dev/null
 grep -F '__UV_EXECUTABLE__' assets/systemd/docker-ws-workbench.service >/dev/null
+grep -F 'workbench serve' assets/systemd/docker-ws-workbench.service >/dev/null
+grep -F '__WORKBENCH_CONFIG__' assets/systemd/docker-ws-workbench.service >/dev/null
+grep -F '__WORKBENCH_PORT__' assets/systemd/docker-ws-workbench.service >/dev/null
+grep -F 'run --frozen' assets/systemd/docker-ws-workbench.service >/dev/null
 
 bash -n tests/helpers/fake-docker tests/helpers/fake-vncviewer tests/test-workstation.sh \
   tests/test-cli.sh tests/test-package-images.sh
 python3 -m py_compile docker_ws/cli/main.py docker_ws/core/workstation.py docker_ws/core/images.py \
-  docker_ws/core/recipes.py docker_ws/core/image_builder.py docker_ws/core/image_verifier.py docker_ws/web/app.py
+  docker_ws/core/recipes.py docker_ws/core/image_builder.py docker_ws/core/image_verifier.py \
+  docker_ws/core/workbench_deployment.py docker_ws/core/workbench_connection.py docker_ws/web/app.py
 bash tests/test-workstation.sh
 bash tests/test-cli.sh
 bash tests/test-package-images.sh

@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import argparse
 import os
-import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -17,6 +16,8 @@ from docker_ws.core.image_builder import ImageBuilder
 from docker_ws.core.image_verifier import ImageVerifier
 from docker_ws.core.images import WorkstationImages
 from docker_ws.core.recipes import DEFAULT_PLATFORM, RecipeCatalog
+from docker_ws.core.workbench_connection import DEFAULT_WORKBENCH_PORT, connect as connect_workbench
+from docker_ws.core.workbench_deployment import DeploymentOptions, WorkbenchDeployment, load_runtime_config
 
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
@@ -137,36 +138,105 @@ def _verify_image(image: str) -> int:
         return _fail(str(exc))
 
 
-def _install_service() -> int:
+def _deployment(port: int = DEFAULT_WORKBENCH_PORT, code_root: str | None = None,
+                state_root: str | None = None, docker_command: str | None = None) -> WorkbenchDeployment:
+    return WorkbenchDeployment(DeploymentOptions(
+        repository_root=REPOSITORY_ROOT,
+        port=port,
+        code_root=Path(code_root).expanduser() if code_root else None,
+        state_root=Path(state_root).expanduser() if state_root else None,
+        docker_command=docker_command,
+    ))
+
+
+def _deploy_workbench(port: int = DEFAULT_WORKBENCH_PORT, code_root: str | None = None,
+                      state_root: str | None = None, docker_command: str | None = None) -> int:
     try:
-        uv = shutil.which("uv")
-        if uv is None:
-            raise WorkstationError("uv command not found; install uv before installing the Workbench service")
-        unit_dir = Path(os.environ.get("XDG_CONFIG_HOME", str(Path.home() / ".config"))) / "systemd/user"
-        unit_dir.mkdir(parents=True, exist_ok=True)
-        template = (REPOSITORY_ROOT / "assets/systemd/docker-ws-workbench.service").read_text()
-        unit = unit_dir / "docker-ws-workbench.service"
-        unit.write_text(template.replace("__WORKBENCH_ROOT__", str(REPOSITORY_ROOT)).replace("__UV_EXECUTABLE__", uv))
-        subprocess.run(["systemctl", "--user", "daemon-reload"], check=True)
-        subprocess.run(["systemctl", "--user", "enable", "--now", "docker-ws-workbench.service"], check=True)
-        print("Workbench is listening only at http://127.0.0.1:8787")
+        print("Building and deploying Docker Workbench…")
+        result = _deployment(port, code_root, state_root, docker_command).deploy()
+        print(f"Docker Workbench deployed with {result.manager}: {result.url}")
+        if result.log_path:
+            print(f"Log: {result.log_path}")
+        elif result.manager == "systemd":
+            print("Logs: journalctl --user -u docker-ws-workbench.service")
         return 0
-    except (OSError, subprocess.CalledProcessError, WorkstationError) as exc:
+    except (OSError, WorkstationError) as exc:
         return _fail(str(exc))
 
 
-def _workbench() -> int:
+def _workbench_status(action: str) -> int:
+    try:
+        deployment = _deployment()
+        status = deployment.stop() if action == "stop" else deployment.status()
+        print(f"Docker Workbench: {status.state} ({status.manager or 'unmanaged'}) — {status.message}")
+        if status.log_path:
+            print(f"Log: {status.log_path}")
+        elif status.manager == "systemd":
+            print("Logs: journalctl --user -u docker-ws-workbench.service")
+        return 0 if status.state in {"running", "stopped", "absent"} else 1
+    except (OSError, WorkstationError) as exc:
+        return _fail(str(exc))
+
+
+def _connect_workbench(ssh_host: str, local_port: int | None, remote_port: int,
+                       open_browser: bool) -> int:
+    try:
+        result = connect_workbench(
+            ssh_host,
+            local_port=local_port,
+            remote_port=remote_port,
+            open_browser=open_browser,
+            on_ready=lambda url: print(f"Docker Workbench: {url}\nPress Ctrl+C to close the SSH tunnel."),
+        )
+        return 0 if result.interrupted else 1
+    except (OSError, WorkstationError) as exc:
+        return _fail(str(exc))
+
+
+def _workbench(port: int = DEFAULT_WORKBENCH_PORT, config: str | Path | None = None) -> int:
     if not WORKBENCH_INDEX.is_file():
-        return _fail("Workbench frontend is not built. Run:\n  npm ci --prefix apps/workbench\n  npm run --prefix apps/workbench build")
-    uvicorn.run("docker_ws.web.app:app", host="127.0.0.1", port=8787, proxy_headers=False)
-    return 0
+        return _fail("Workbench frontend is not built. Run `docker-ws workbench deploy` or:\n  npm ci --prefix apps/workbench\n  npm run --prefix apps/workbench build")
+    try:
+        if config is not None:
+            os.environ.update(load_runtime_config(Path(config).expanduser()))
+        uvicorn.run("docker_ws.web.app:app", host="127.0.0.1", port=port, proxy_headers=False)
+        return 0
+    except (OSError, WorkstationError) as exc:
+        return _fail(str(exc))
+
+
+def _port(value: str) -> int:
+    try:
+        port = int(value)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError("port must be an integer between 1 and 65535") from exc
+    if not 1 <= port <= 65535:
+        raise argparse.ArgumentTypeError("port must be an integer between 1 and 65535")
+    return port
 
 
 def parser() -> argparse.ArgumentParser:
     command = argparse.ArgumentParser(prog="docker-ws", description="Manage the Docker Workstation.")
     actions = command.add_subparsers(dest="command", required=True, metavar="COMMAND")
     actions.add_parser("help", help="Show this help message.", description="Show the Docker Workstation command overview.")
-    actions.add_parser("workbench", help="Serve the loopback-only web Workbench.", description="Serve the loopback-only web Workbench.")
+    workbench = actions.add_parser("workbench", help="Deploy, serve, or connect to Docker Workbench.")
+    workbench_actions = workbench.add_subparsers(dest="workbench_action", metavar="ACTION")
+    workbench_actions.add_parser("help", help="Show Workbench command help.").set_defaults(help_parser=workbench)
+    serve = workbench_actions.add_parser("serve", help="Serve Workbench on remote loopback.")
+    serve.add_argument("--port", type=_port, default=DEFAULT_WORKBENCH_PORT)
+    serve.add_argument("--config", help="Deployment runtime configuration file.")
+    deploy = workbench_actions.add_parser("deploy", help="Build and deploy Workbench on this Docker host.")
+    deploy.add_argument("--port", type=_port, default=DEFAULT_WORKBENCH_PORT)
+    deploy.add_argument("--code-root", help="Host project directory mounted into managed containers.")
+    deploy.add_argument("--state-root", help="Host directory for persistent Workstation state.")
+    deploy.add_argument("--docker-command", help="Docker-compatible command used on the remote host.")
+    connect = workbench_actions.add_parser("connect", help="Open a local SSH tunnel to a deployed Workbench.")
+    connect.add_argument("ssh_host", help="SSH host, user@host, or configured SSH alias.")
+    connect.add_argument("--local-port", type=_port, default=None, help="Explicit local loopback port; defaults to an available port.")
+    connect.add_argument("--remote-port", type=_port, default=DEFAULT_WORKBENCH_PORT, help="Remote Workbench loopback port.")
+    connect.add_argument("--no-open", action="store_true", help="Do not open the local browser automatically.")
+    workbench_actions.add_parser("status", help="Show deployed Workbench service status.")
+    workbench_actions.add_parser("stop", help="Stop the deployed Workbench service.")
     container = actions.add_parser("container", help="Manage the workstation container.")
     container_actions = container.add_subparsers(dest="container_action", required=True, metavar="ACTION")
     container_actions.add_parser("help", help="Show container command help.").set_defaults(help_parser=container)
@@ -240,7 +310,17 @@ def main(argv: Sequence[str] | None = None) -> int:
     if arguments.command == "gpus":
         return _host_inventory("gpus", arguments.json)
     if arguments.command == "workbench":
-        return _workbench()
+        action = arguments.workbench_action or "serve"
+        if action == "help":
+            arguments.help_parser.print_help()
+            return 0
+        if action == "serve":
+            return _workbench(getattr(arguments, "port", DEFAULT_WORKBENCH_PORT), getattr(arguments, "config", None))
+        if action == "deploy":
+            return _deploy_workbench(arguments.port, arguments.code_root, arguments.state_root, arguments.docker_command)
+        if action == "connect":
+            return _connect_workbench(arguments.ssh_host, arguments.local_port, arguments.remote_port, not arguments.no_open)
+        return _workbench_status(action)
     if arguments.command == "image":
         if arguments.image_action == "help":
             arguments.help_parser.print_help()
@@ -271,7 +351,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         if arguments.service_action == "help":
             arguments.help_parser.print_help()
             return 0
-        return _install_service()
+        return _deploy_workbench()
     return 2
 
 

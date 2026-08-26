@@ -134,26 +134,71 @@ images, and can create containers from a selected image and GPU allocation. Its
 inspector and lower Activity/Root Bash dock are resizable; layout and Activity
 history persist in the browser.
 
-Install its Python dependencies and build the browser client once:
+### Remote host deployment
+
+On the HPC or workstation that runs Docker, clone this repository and run one
+command from its checkout:
 
 ```bash
-uv sync --group dev
-cd apps/workbench && npm ci && npm run build && cd ../..
-uv run docker-ws workbench
+uv run docker-ws workbench deploy
 ```
 
-The server always binds to the host loopback interface (`127.0.0.1:8787`). On
-the host, open <http://127.0.0.1:8787>. From another computer, create an SSH
-tunnel and then open the same URL locally:
+Deploy requires `uv`, Node/npm, Docker, and a writable repository checkout. It
+installs the locked Python and frontend dependencies, builds the browser client,
+starts a loopback-only server, and waits for its health check. Image builds stay
+explicit: deploy does not build `android-ws` or recreate containers.
+
+`workbench deploy` prefers a user-level systemd service and is safe to repeat
+after updating the checkout. If user systemd is unavailable, it runs a managed
+detached process instead. The fallback may be terminated by HPC systems when
+your login session ends; user systemd is the durable option. Use
+`uv run docker-ws workbench status` to inspect the service/process and
+`uv run docker-ws workbench stop` to stop it. Deployment configuration is kept
+under the XDG configuration directory and its logs are reported by the status
+and deployment commands. `ROBOTICS_WS_VNC_PASSWORD` is intentionally never
+persisted there. On systems using user systemd, enable linger when the service
+must survive logout:
 
 ```bash
-ssh -L 8787:127.0.0.1:8787 USER@WORKSTATION_HOST
+loginctl enable-linger "$USER"
 ```
 
-To run Workbench as a user-level systemd service, use
-`uv run docker-ws service install`. It does not need root privileges. For it to
-remain running after logout, enable linger for the account with
-`loginctl enable-linger "$USER"`.
+The Workbench server always binds to `127.0.0.1` on the remote host; it is not
+exposed to the network and no public authentication surface is added.
+
+### Local browser connection
+
+On the local machine, where Docker is not required, use the same CLI to create
+the SSH tunnel, wait for Workbench readiness, and open the browser:
+
+```bash
+uv run docker-ws workbench connect USER@HPC_HOST
+```
+
+The local browser opens a `127.0.0.1` URL through the foreground SSH tunnel.
+Keep this command running while using Workbench; press Ctrl+C to close the
+tunnel. `connect` uses your normal SSH configuration, so aliases, identity
+files, nonstandard ports, and bastion hosts via `ProxyJump` work unchanged. For
+example:
+
+```bash
+uv run docker-ws workbench connect research-hpc
+uv run docker-ws workbench connect research-hpc --local-port 9878 --remote-port 8787 --no-open
+```
+
+When the default local port is occupied, `connect` selects a free local port;
+an explicitly requested busy `--local-port` fails instead. `--no-open` prints
+the local URL without launching a browser. `workbench serve` remains available
+for foreground development or direct use on the Docker host. The legacy
+`service install` command remains a compatibility alias for deployment.
+
+### Remote acceptance flow
+
+1. On the remote Docker host, run `uv run docker-ws workbench deploy`.
+2. On the local machine, run `uv run docker-ws workbench connect USER@HPC_HOST`.
+3. In Workbench, build and explicitly verify `android-ws`.
+4. Create a managed remote container from the verified image, then open its
+   Root Bash terminal or desktop from the same local browser session.
 
 The VNC password is sent directly to noVNC for the current connection, is not
 saved by the browser or Workbench, and is never returned by its API. The first

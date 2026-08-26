@@ -1,4 +1,5 @@
 import asyncio
+import time
 
 import pytest
 from fastapi.testclient import TestClient
@@ -75,6 +76,17 @@ class FakeImageBuilder:
 class FakeImageVerifier:
     def __init__(self): self.calls = []
     def verify(self, image): self.calls.append(image); return "verified"
+
+
+def test_health_is_a_minimal_docker_independent_readiness_probe():
+    class UnavailableWorkstation:
+        def status(self):
+            raise AssertionError("health must not query Docker or workstation status")
+
+    response = TestClient(create_app(UnavailableWorkstation())).get("/api/health")
+
+    assert response.status_code == 200
+    assert response.json() == {"status": "ok"}
 
 
 def test_status_issues_csrf_and_mutations_require_it():
@@ -262,16 +274,24 @@ def test_build_and_verify_are_csrf_protected_serialized_image_jobs():
     app = create_app(FakeWorkstation(), fleet=FakeFleet(), recipes=recipes,
                      image_builder=builder, image_verifier=verifier)
     with TestClient(app) as client:
+        def wait_for_job(job_id):
+            for _ in range(100):
+                response = client.get(f"/api/image-jobs/{job_id}")
+                if response.json()["state"] in {"completed", "failed"}:
+                    return response
+                time.sleep(0.001)
+            pytest.fail(f"image job did not complete: {job_id}")
+
         token = client.get("/api/image-recipes").json()["csrf_token"]
         headers = {"origin": "http://testserver", "x-csrf-token": token}
         assert client.post("/api/images/build", json={}).status_code == 403
         build = client.post("/api/images/build", json={"recipe_id": "android-ws", "tag": "custom:two", "target": None, "no_cache": True}, headers=headers)
         assert build.status_code == 200
-        build_job = client.get(f"/api/image-jobs/{build.json()['id']}")
+        build_job = wait_for_job(build.json()["id"])
         assert build_job.json()["state"] == "completed"
         assert builder.calls and builder.calls[0][1] == {"tag": "custom:two", "target": None, "no_cache": True}
         verify = client.post("/api/images/sha256:one/verify", headers=headers)
         assert verify.status_code == 200
-        verify_job = client.get(f"/api/image-jobs/{verify.json()['id']}")
+        verify_job = wait_for_job(verify.json()["id"])
         assert verify_job.json()["state"] == "completed"
         assert verifier.calls == ["sha256:one"]
