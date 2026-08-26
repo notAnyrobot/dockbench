@@ -52,6 +52,8 @@ class GPU:
     index: int
     name: str
     memory_total_mib: int
+    memory_used_mib: int | None = None
+    utilization_percent: int | None = None
 
     def public(self) -> dict[str, object]:
         return asdict(self)
@@ -102,7 +104,7 @@ class HostInventory:
 
     def resolve_image(self, selection: str) -> LocalImage:
         if not selection:
-            raise WorkstationError("an image is required when creating a workstation; use docker-ws images")
+            raise WorkstationError("an image is required when creating a workstation; use docker-ws image list")
         for image in self.images():
             if selection == image.id or selection in image.references or image.id.startswith(selection):
                 return image
@@ -124,7 +126,7 @@ class HostInventory:
         if shutil.which("nvidia-smi") is None:
             return (), "nvidia-smi is unavailable on this host; GPU selection is unavailable."
         try:
-            result = self._command_run(["nvidia-smi", "--query-gpu=index,uuid,name,memory.total", "--format=csv,noheader,nounits"],
+            result = self._command_run(["nvidia-smi", "--query-gpu=index,uuid,name,memory.total,memory.used,utilization.gpu", "--format=csv,noheader,nounits"],
                 text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False)
         except OSError as exc:
             return (), f"Unable to inspect NVIDIA GPUs: {exc}"
@@ -133,10 +135,14 @@ class HostInventory:
         gpus: list[GPU] = []
         for row in result.stdout.splitlines():
             parts = [part.strip() for part in row.split(",")]
-            if len(parts) != 4:
+            # Four columns are accepted for compatibility with older NVIDIA
+            # drivers and test doubles.  Newer hosts also report live usage.
+            if len(parts) not in {4, 6}:
                 continue
             try:
-                gpus.append(GPU(parts[1], int(parts[0]), parts[2], int(float(parts[3]))))
+                gpus.append(GPU(parts[1], int(parts[0]), parts[2], int(float(parts[3])),
+                                int(float(parts[4])) if len(parts) == 6 and parts[4] not in {"N/A", "[Not Supported]"} else None,
+                                int(float(parts[5])) if len(parts) == 6 and parts[5] not in {"N/A", "[Not Supported]"} else None))
             except ValueError:
                 continue
         return tuple(gpus), None if gpus else "No NVIDIA GPUs were reported by nvidia-smi."

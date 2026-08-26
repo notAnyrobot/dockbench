@@ -37,12 +37,12 @@ container filesystem are discarded.
 Inspect tagged local images and GPUs, then start a persistent workstation:
 
 ```bash
-uv run docker-ws images
+uv run docker-ws image list
 uv run docker-ws gpus
-uv run docker-ws start
-uv run docker-ws start --image ubuntu:24.04 --gpu none
-uv run docker-ws start --image YOUR_IMAGE --gpu 0 --gpu GPU-UUID
-uv run docker-ws enter
+uv run docker-ws container start
+uv run docker-ws container start --image ubuntu:24.04 --gpu none
+uv run docker-ws container start --image YOUR_IMAGE --gpu 0 --gpu GPU-UUID
+uv run docker-ws container enter
 ```
 
 The default launch uses `docker-ws:u22.04-cu12.8.1-v1-desktop` and all reported
@@ -51,6 +51,10 @@ specific subset. A running managed container is immutable: changing its image or
 requires `--replace`, which retains `/workspace` and `/state` but discards
 changes made only in the old container filesystem. Generic containers run as
 root, so files created in `/workspace` may become root-owned on the host.
+Stopping a container terminates all processes inside it. Starting it again
+resumes that same container and writable filesystem; it does not create a fresh
+container. Use remove/create or an explicit replacement when a fresh container
+is required.
 
 By default, `docker-ws` mounts the host's `~/Code` at `/workspace` and preserves
 state at `.robotics-ws`. Set `ROBOTICS_WS_CODE_ROOT` to mount a different host
@@ -62,7 +66,7 @@ when provisioning a password—never store it in this repository.
 
 The bundled image advertises desktop contract `v1`, enabling VNC and Workbench
 desktop controls. Shell-only images never have VNC installed or started; use
-`docker-ws enter` instead. The generic launcher runs root to avoid requiring
+`docker-ws container enter` instead. The generic launcher runs root to avoid requiring
 user-management tools in arbitrary images.
 
 ```bash
@@ -80,9 +84,10 @@ To transfer built images, use `uv run docker-ws image package [DIRECTORY]` or
 ## Workbench
 
 Workbench is a desktop-first, single-user browser companion for the same
-`docker-ws` workstation. When no container exists it lists local images and
-available GPUs, then creates one selected container. It supports one managed
-container today; multi-container tabs are intentionally deferred.
+`docker-ws` fleet. It lists managed containers, local images, and available
+GPUs, and can create containers from a selected image and GPU allocation. Its
+inspector and lower Activity/Root Bash dock are resizable; layout and Activity
+history persist in the browser.
 
 Install its Python dependencies and build the browser client once:
 

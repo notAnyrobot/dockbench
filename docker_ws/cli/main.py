@@ -37,7 +37,7 @@ def _workstation(action: str, image: str | None = None, gpus: list[str] | None =
                 all_gpus=None if gpus is None else "all" in values, replace=replace)
         else:
             result = getattr(workstation, {"vnc": "open_vnc"}.get(action, action))()
-        if action == "status":
+        if action in {"start", "stop", "status"}:
             print(f"{workstation.config.container_name}: {result.state}")
         return 0
     except WorkstationError as exc:
@@ -104,24 +104,30 @@ def _workbench() -> int:
 def parser() -> argparse.ArgumentParser:
     command = argparse.ArgumentParser(prog="docker-ws", description="Manage the Docker Workstation.")
     actions = command.add_subparsers(dest="command", required=True, metavar="COMMAND")
+    actions.add_parser("help", help="Show this help message.", description="Show the Docker Workstation command overview.")
+    actions.add_parser("workbench", help="Serve the loopback-only web Workbench.", description="Serve the loopback-only web Workbench.")
+    container = actions.add_parser("container", help="Manage the workstation container.")
+    container_actions = container.add_subparsers(dest="container_action", required=True, metavar="ACTION")
+    container_actions.add_parser("help", help="Show container command help.").set_defaults(help_parser=container)
     for action, description in {
         "start": "Create or start the workstation without configuring VNC.",
         "enter": "Open Bash in the running workstation as the host user.",
         "stop": "Stop the workstation without removing it.",
         "status": "Print workstation state.",
         "vnc": "Provision VNC if needed and open the native viewer.",
-        "workbench": "Serve the loopback-only web Workbench.",
     }.items():
-        command_action = actions.add_parser(action, help=description, description=description)
+        command_action = container_actions.add_parser(action, help=description, description=description)
         if action == "start":
             command_action.add_argument("--image", help="Tagged local image to use when creating the workstation.")
             command_action.add_argument("--gpu", action="append", default=None, metavar="UUID_OR_INDEX", help="GPU UUID/index, 'all' (default), or 'none'; repeat for multiple GPUs.")
             command_action.add_argument("--replace", action="store_true", help="Replace a container whose immutable image/GPU launch request differs.")
-    for inventory_name, description in (("images", "List tagged local images."), ("gpus", "List NVIDIA GPUs available to Docker.")):
-        inventory = actions.add_parser(inventory_name, help=description, description=description)
-        inventory.add_argument("--json", action="store_true", help="Emit machine-readable JSON.")
+    gpus = actions.add_parser("gpus", help="List NVIDIA GPUs available to Docker.", description="List NVIDIA GPUs available to Docker.")
+    gpus.add_argument("--json", action="store_true", help="Emit machine-readable JSON.")
     image = actions.add_parser("image", help="Build, replace, package, or load images.")
     image_actions = image.add_subparsers(dest="image_action", required=True, metavar="ACTION")
+    image_actions.add_parser("help", help="Show image command help.").set_defaults(help_parser=image)
+    image_list = image_actions.add_parser("list", help="List tagged local images.")
+    image_list.add_argument("--json", action="store_true", help="Emit machine-readable JSON.")
     image_actions.add_parser("build", help="Build or update the desktop image using Docker's layer cache.")
     image_actions.add_parser("rebuild", help="Build the image, replace the container, and start it again.")
     package = image_actions.add_parser("package", help="Save the desktop image as a Docker tar file.")
@@ -130,21 +136,34 @@ def parser() -> argparse.ArgumentParser:
     load.add_argument("tarfile", nargs="+")
     service = actions.add_parser("service", help="Manage the Workbench user service.")
     service_actions = service.add_subparsers(dest="service_action", required=True, metavar="ACTION")
+    service_actions.add_parser("help", help="Show service command help.").set_defaults(help_parser=service)
     service_actions.add_parser("install", help="Install and start the user-level Workbench service.")
     return command
 
 
 def main(argv: Sequence[str] | None = None) -> int:
-    arguments = parser().parse_args(argv)
-    if arguments.command == "start":
-        return _workstation("start", arguments.image, arguments.gpu, arguments.replace)
-    if arguments.command in {"enter", "stop", "status", "vnc"}:
-        return _workstation(arguments.command)
-    if arguments.command in {"images", "gpus"}:
-        return _host_inventory(arguments.command, arguments.json)
+    command = parser()
+    arguments = command.parse_args(argv)
+    if arguments.command == "help":
+        command.print_help()
+        return 0
+    if arguments.command == "container":
+        if arguments.container_action == "help":
+            arguments.help_parser.print_help()
+            return 0
+        if arguments.container_action == "start":
+            return _workstation("start", arguments.image, arguments.gpu, arguments.replace)
+        return _workstation(arguments.container_action)
+    if arguments.command == "gpus":
+        return _host_inventory("gpus", arguments.json)
     if arguments.command == "workbench":
         return _workbench()
     if arguments.command == "image":
+        if arguments.image_action == "help":
+            arguments.help_parser.print_help()
+            return 0
+        if arguments.image_action == "list":
+            return _host_inventory("images", arguments.json)
         if arguments.image_action in {"build", "rebuild"}:
             return _workstation(arguments.image_action)
         if arguments.image_action == "package":
@@ -155,6 +174,9 @@ def main(argv: Sequence[str] | None = None) -> int:
             paths = arguments.tarfile
         return _package_images(arguments.image_action, paths)
     if arguments.command == "service":
+        if arguments.service_action == "help":
+            arguments.help_parser.print_help()
+            return 0
         return _install_service()
     return 2
 

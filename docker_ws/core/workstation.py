@@ -11,12 +11,12 @@ import shutil
 import subprocess
 import sys
 import time
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 from typing import Iterable, Protocol
 
 from docker_ws.core.defaults import DEFAULT_IMAGE
-from docker_ws.core.errors import WorkstationError, WorkstationRebuildRequired, WorkstationReplaceRequired
+from docker_ws.core.errors import WorkstationError, WorkstationGPUConflict, WorkstationRebuildRequired, WorkstationReplaceRequired
 from docker_ws.core.host_inventory import HostInventory
 
 
@@ -40,6 +40,7 @@ class WorkstationConfig:
     repository_root: Path; docker_command: str; code_root: Path; state_root: Path; shm_size: str
     host_uid: int; host_gid: int; host_user: str; image: str | None; container_name: str
     vnc_port: int; vncviewer_command: str; docker_mode: str; container_uid: int; container_gid: int
+    dynamic_vnc_port: bool = False
     @property
     def launch_config(self) -> str: return "|".join((str(self.code_root), str(self.state_root), self.shm_size, str(self.host_uid), str(self.host_gid), self.docker_mode, str(self.vnc_port)))
     @classmethod
@@ -73,6 +74,7 @@ class LaunchSpecification:
 class WorkstationStatus:
     state: str; desktop_ready: bool; image: str; container_name: str; workspace: str
     image_id: str | None = None; image_ref: str | None = None; gpu_uuids: tuple[str, ...] = (); desktop_capable: bool = False; message: str | None = None
+    vnc_port: int | None = None; stale: bool = False
     def public(self) -> dict[str, object]:
         result = asdict(self); result["gpu_uuids"] = list(self.gpu_uuids); return result
 
@@ -110,11 +112,43 @@ class Workstation:
             return next((image for image in getattr(self.inventory, "images")() if image.id == image_id), None)
         except (AttributeError, WorkstationError):
             return None
+    def _legacy_gpu_uuids(self) -> tuple[str, ...]:
+        """Recover GPU allocation for pre-launch-spec containers from Docker's device request."""
+        try:
+            raw = self.docker.run(
+                ["container", "inspect", "--format", "{{json .HostConfig.DeviceRequests}}", self.config.container_name],
+                capture=True,
+            )
+            requests = json.loads(raw) if raw else []
+        except (WorkstationError, json.JSONDecodeError, TypeError):
+            return ()
+        if not isinstance(requests, list):
+            return ()
+        selected: list[str] = []
+        for request in requests:
+            if not isinstance(request, dict):
+                continue
+            capabilities = request.get("Capabilities") or []
+            if "gpu" not in {str(capability).lower() for group in capabilities if isinstance(group, list) for capability in group}:
+                continue
+            device_ids = request.get("DeviceIDs") or []
+            if device_ids:
+                try:
+                    selected.extend(gpu.uuid for gpu in self.inventory.resolve_gpus(tuple(map(str, device_ids)), False))
+                except (AttributeError, WorkstationError):
+                    continue
+            elif request.get("Count") == -1:
+                try:
+                    host = self.inventory.inventory().public()
+                    selected.extend(str(gpu["uuid"]) for gpu in host.get("gpus", []) if gpu.get("uuid"))
+                except (AttributeError, WorkstationError, TypeError):
+                    continue
+        return tuple(dict.fromkeys(selected))
     def status(self) -> WorkstationStatus:
         raw = self._container_status(); state = "absent" if not raw else "running" if raw == "running" else "stopped" if raw in {"created", "exited"} else "unavailable"; spec = self._launch_spec()
         legacy_image = self._legacy_image() if raw and spec is None else None
-        image_id = spec.image_id if spec else (self._container_image_id() if raw else None); image_ref = spec.image_ref if spec else (legacy_image.display_reference if legacy_image else self.config.image); desktop = spec.desktop_capable if spec else bool(legacy_image and any(ref.startswith("docker-ws:") for ref in legacy_image.references))
-        return WorkstationStatus(state, self._vnc_running() if state == "running" and desktop else False, image_ref or image_id or "", self.config.container_name, "/workspace", image_id, image_ref, spec.gpu_uuids if spec else (), desktop, None if state != "unavailable" else f"Docker state: {raw}")
+        image_id = spec.image_id if spec else (self._container_image_id() if raw else None); image_ref = spec.image_ref if spec else (legacy_image.display_reference if legacy_image else self.config.image); desktop = spec.desktop_capable if spec else bool(legacy_image and any(ref.startswith("docker-ws:") for ref in legacy_image.references)); gpu_uuids = spec.gpu_uuids if spec else (self._legacy_gpu_uuids() if raw else ())
+        return WorkstationStatus(state, self._vnc_running() if state == "running" and desktop else False, image_ref or image_id or "", self.config.container_name, "/workspace", image_id, image_ref, gpu_uuids, desktop, None if state != "unavailable" else f"Docker state: {raw}")
     def _specification(self, image: str | None, gpus: tuple[str, ...], all_gpus: bool) -> LaunchSpecification:
         selected = self.inventory.resolve_image(image or self.config.image or ""); selected_gpus = self.inventory.resolve_gpus(gpus, all_gpus)
         return LaunchSpecification(selected.id, selected.display_reference, tuple(gpu.uuid for gpu in selected_gpus), selected.desktop_contract)
@@ -124,9 +158,12 @@ class Workstation:
         c = self.config; c.state_root.mkdir(parents=True, exist_ok=True)
         # Never force a platform for an arbitrary local image: Docker has
         # already resolved the image's locally available architecture.
-        args = ["run", "-d", "--name", c.container_name, "--hostname", c.container_name, "--shm-size", c.shm_size, "--restart", "unless-stopped", "--label", f"docker-ws.launch-spec={spec.label_value()}", "--label", f"docker-ws.image-id={spec.image_id}", "--label", f"docker-ws.image-ref={spec.image_ref}", "--label", f"docker-ws.gpus={','.join(spec.gpu_uuids)}", "--label", f"robotics-ws.launch-config={c.launch_config}", "--mount", f"type=bind,src={c.code_root},dst=/workspace", "--mount", f"type=bind,src={c.state_root},dst=/state"]
+        args = ["run", "-d", "--name", c.container_name, "--hostname", c.container_name, "--shm-size", c.shm_size, "--restart", "unless-stopped", "--label", "docker-ws.managed=true", "--label", f"docker-ws.state-root={c.state_root}", "--label", f"docker-ws.launch-spec={spec.label_value()}", "--label", f"docker-ws.image-id={spec.image_id}", "--label", f"docker-ws.image-ref={spec.image_ref}", "--label", f"docker-ws.gpus={','.join(spec.gpu_uuids)}", "--label", f"robotics-ws.launch-config={c.launch_config}", "--mount", f"type=bind,src={c.code_root},dst=/workspace", "--mount", f"type=bind,src={c.state_root},dst=/state"]
         if spec.gpu_uuids: args += ["--gpus", f"device={','.join(spec.gpu_uuids)}"]
-        if spec.desktop_capable: args += ["-p", f"127.0.0.1:{c.vnc_port}:5901"]
+        if spec.desktop_capable:
+            # Fleet containers use Docker's ephemeral host ports.  This makes
+            # several desktops possible without exposing VNC beyond loopback.
+            args += ["-p", "127.0.0.1::5901" if c.dynamic_vnc_port else f"127.0.0.1:{c.vnc_port}:5901"]
         self.docker.run(args + ["--entrypoint", "/bin/sh", spec.image_id, "-lc", "exec sleep infinity"])
     def _prepare_user(self) -> None:
         """Prepare the historical desktop-user contract, never generic shells."""
@@ -181,7 +218,7 @@ chown "$requested_uid:$requested_gid" /state/.robotics-ws-bashrc
     def rebuild(self) -> WorkstationStatus:
         self.build(); return self.start(image=self.config.image or DEFAULT_IMAGE, replace=True)
     def enter(self) -> None:
-        if self._container_status() != "running": raise WorkstationError(f"{self.config.container_name} is not running; use --start first")
+        if self._container_status() != "running": raise WorkstationError(f"{self.config.container_name} is not running; use docker-ws container start first")
         c = self.config
         if self.status().desktop_capable:
             self._prepare_user()
@@ -191,12 +228,12 @@ chown "$requested_uid:$requested_gid" /state/.robotics-ws-bashrc
     def stop(self) -> WorkstationStatus:
         with self.locked():
             raw = self._container_status()
-            if not raw: raise WorkstationError(f"{self.config.container_name} does not exist; use --start first")
+            if not raw: raise WorkstationError(f"{self.config.container_name} does not exist; use docker-ws container start first")
             if raw == "running": self.docker.run(["stop", self.config.container_name])
             elif raw not in {"created", "exited"}: raise WorkstationError(f"unsupported container state for --stop: {raw}")
             return self.status()
     def _require_desktop(self) -> None:
-        if not self.status().desktop_capable: raise WorkstationError("The selected image does not advertise Docker Workstation desktop contract v1; shell access remains available with docker-ws enter.")
+        if not self.status().desktop_capable: raise WorkstationError("The selected image does not advertise Docker Workstation desktop contract v1; shell access remains available with docker-ws container enter.")
     def _password_exists(self) -> bool:
         c = self.config
         try: self.docker.run(["exec", "--user", f"{c.container_uid}:{c.container_gid}", c.container_name, "/bin/bash", "-c", "test -s /state/home/.vnc/passwd"]); return True
@@ -227,7 +264,19 @@ chown "$requested_uid:$requested_gid" /state/.robotics-ws-bashrc
         self._require_desktop()
         if self._container_status() != "running": self.start()
         with self.locked():
-            self._prepare_user(); self._ensure_vnc_password(password); self._start_vnc(); self._wait_for_vnc(); return DesktopEndpoint("127.0.0.1", self.config.vnc_port)
+            self._prepare_user(); self._ensure_vnc_password(password); self._start_vnc(); self._wait_for_vnc(); return DesktopEndpoint("127.0.0.1", self._desktop_port())
+
+    def _desktop_port(self) -> int:
+        if not self.config.dynamic_vnc_port:
+            return self.config.vnc_port
+        try:
+            value = self.docker.run(["container", "inspect", "--format", '{{(index (index .NetworkSettings.Ports "5901/tcp") 0).HostPort}}', self.config.container_name], capture=True)
+            port = int(value)
+            if port > 0:
+                return port
+        except (ValueError, WorkstationError):
+            pass
+        raise WorkstationError("Docker did not allocate a loopback VNC port for this desktop")
     def reset_vnc_password(self, password: str) -> WorkstationStatus:
         if not 6 <= len(password) <= 8: raise WorkstationError("VNC passwords must contain 6 to 8 characters")
         self._require_desktop()
@@ -250,11 +299,217 @@ HOME=/state/home vncserver -kill :1 >/dev/null 2>&1 || true
     def open_vnc(self) -> None:
         if shutil.which(self.config.vncviewer_command) is None: raise WorkstationError(f"VNC viewer not found: {self.config.vncviewer_command}")
         self._require_desktop()
-        if self._container_status() != "running": raise WorkstationError(f"{self.config.container_name} is not running; use --start first")
+        if self._container_status() != "running": raise WorkstationError(f"{self.config.container_name} is not running; use docker-ws container start first")
         with self.locked(): self._prepare_user(); self._ensure_vnc_password(prompt=True); self._start_vnc(); self._wait_for_vnc()
         password_file = self.config.state_root / "home/.vnc/passwd"
         if not os.access(password_file, os.R_OK): raise WorkstationError(f"VNC password file is not readable from the host: {password_file}")
         subprocess.run([self.config.vncviewer_command, "-SecurityTypes=VncAuth", f"-PasswordFile={password_file}", "-ViewOnly=0", f"127.0.0.1:{self.config.vnc_port}"], check=False)
+
+
+class FleetManager:
+    """Managed-only multi-container lifecycle facade used by Workbench.
+
+    CLI commands keep using ``Workstation`` and the configured default name.
+    Labels form the fleet discovery boundary; the legacy default is the sole
+    compatibility exception, so unrelated Docker containers are never shown.
+    """
+    managed_label = "docker-ws.managed=true"
+    _name = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,62}$")
+
+    def __init__(self, config: WorkstationConfig | None = None, runner: DockerRunner | None = None,
+                 inventory: HostInventory | None = None) -> None:
+        self.config = config or WorkstationConfig.from_environment()
+        self.docker = runner or SubprocessDockerRunner(self.config.docker_command)
+        self.host_inventory = inventory or HostInventory(self.docker)
+
+    @contextlib.contextmanager
+    def locked(self) -> Iterable[None]:
+        self.config.state_root.mkdir(parents=True, exist_ok=True)
+        with (self.config.state_root / ".fleet.lock").open("w") as handle:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+            try: yield
+            finally: fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+
+    def _validate_name(self, name: str) -> str:
+        if not self._name.fullmatch(name):
+            raise WorkstationError("container names must be 1–63 letters, numbers, dots, underscores, or dashes")
+        return name
+
+    def _exists(self, name: str) -> bool:
+        try:
+            self.docker.run(["container", "inspect", "--format", "{{.State.Status}}", name], capture=True)
+            return True
+        except WorkstationError:
+            return False
+
+    def _managed_names(self) -> tuple[str, ...]:
+        try:
+            output = self.docker.run(["container", "ls", "-a", "--filter", f"label={self.managed_label}", "--format", "{{.Names}}"], capture=True)
+            names = {line.strip() for line in output.splitlines() if self._name.fullmatch(line.strip())}
+        except WorkstationError:
+            names = set()
+        if self._is_legacy_default():
+            names.add(self.config.container_name)
+        return tuple(sorted(names))
+
+    def _is_legacy_default(self) -> bool:
+        """Recognize the historical default only when its workstation labels prove ownership.
+
+        Container names are user-controlled Docker namespace.  In particular,
+        an unrelated container named ``docker-ws`` must not become manageable
+        merely because it happens to match our default name.
+        """
+        name = self.config.container_name
+        if not self._exists(name):
+            return False
+        try:
+            launch_spec = self.docker.run(
+                ["container", "inspect", "--format", '{{index .Config.Labels "docker-ws.launch-spec"}}', name],
+                capture=True,
+            )
+            if LaunchSpecification.from_label(launch_spec) is not None:
+                return True
+            launch_config = self.docker.run(
+                ["container", "inspect", "--format", '{{index .Config.Labels "robotics-ws.launch-config"}}', name],
+                capture=True,
+            )
+            return launch_config == self.config.launch_config
+        except WorkstationError:
+            return False
+
+    def _config_for(self, name: str) -> WorkstationConfig:
+        self._validate_name(name)
+        if name == self.config.container_name:
+            return self.config
+        return replace(self.config, container_name=name,
+                       state_root=self.config.state_root / "containers" / name,
+                       vnc_port=0, dynamic_vnc_port=True)
+
+    def _workstation(self, name: str) -> Workstation:
+        return Workstation(self._config_for(name), self.docker, self.host_inventory)
+
+    def _is_stale(self, status: WorkstationStatus) -> bool:
+        if not status.image_id:
+            return False
+        # The persisted reference records the image selection. A rebuild may
+        # leave the old image ID locally present, so the reference must still
+        # resolve to the recorded ID.
+        if status.image_ref:
+            try:
+                return self.host_inventory.resolve_image(status.image_ref).id != status.image_id
+            except WorkstationError:
+                return True
+        try: return all(image.id != status.image_id for image in self.host_inventory.images())
+        except WorkstationError: return False
+
+    def _status(self, name: str) -> WorkstationStatus:
+        status = self._workstation(name).status()
+        return replace(status, stale=self._is_stale(status))
+
+    def containers(self) -> tuple[WorkstationStatus, ...]:
+        return tuple(self._status(name) for name in self._managed_names())
+
+    def container(self, name: str) -> WorkstationStatus:
+        self._validate_name(name)
+        if name not in self._managed_names():
+            raise WorkstationError("container is not managed by Docker Workstation")
+        return self._status(name)
+
+    def _reserved_gpus(self, excluding: str | None = None) -> dict[str, str]:
+        reservations: dict[str, str] = {}
+        for status in self.containers():
+            if (status.container_name != excluding and status.state == "running"
+                    and self._name.fullmatch(status.container_name)):
+                reservations.update({gpu: status.container_name for gpu in status.gpu_uuids})
+        return reservations
+
+    def _ensure_gpus_available(self, gpus: tuple[str, ...], excluding: str | None = None) -> None:
+        reservations = self._reserved_gpus(excluding)
+        for gpu in gpus:
+            if gpu in reservations:
+                raise WorkstationGPUConflict(gpu, reservations[gpu])
+
+    def create(self, name: str, image: str, gpu_uuids: tuple[str, ...] = (), all_gpus: bool = False) -> WorkstationStatus:
+        name = self._validate_name(name)
+        with self.locked():
+            if self._exists(name): raise WorkstationError(f"container already exists: {name}")
+            selected = self.host_inventory.resolve_gpus(gpu_uuids, all_gpus)
+            self._ensure_gpus_available(tuple(gpu.uuid for gpu in selected))
+            self._workstation(name).start(image=image, gpus=tuple(gpu.uuid for gpu in selected), all_gpus=False)
+            return self._status(name)
+
+    def start(self, name: str) -> WorkstationStatus:
+        with self.locked():
+            status = self.container(name)
+            self._ensure_gpus_available(status.gpu_uuids, excluding=name)
+            self._workstation(name).start()
+            return self._status(name)
+
+    def stop(self, name: str) -> WorkstationStatus:
+        with self.locked():
+            self.container(name)
+            return self._workstation(name).stop()
+
+    def remove(self, name: str) -> None:
+        with self.locked():
+            self.container(name)
+            raw = self._workstation(name)._container_status()
+            if raw == "running": self.docker.run(["stop", name])
+            if raw: self.docker.run(["rm", name])
+
+    def delete_state(self, name: str) -> None:
+        name = self._validate_name(name)
+        if self._exists(name): raise WorkstationError("remove the container before deleting its persistent state")
+        if name == self.config.container_name: raise WorkstationError("the legacy default state cannot be deleted from Workbench")
+        path = self._config_for(name).state_root
+        if path.is_dir(): shutil.rmtree(path)
+
+    def orphaned_states(self) -> tuple[str, ...]:
+        """Return named persistent-state directories whose container is gone."""
+        root = self.config.state_root / "containers"
+        if not root.is_dir():
+            return ()
+        return tuple(sorted(
+            entry.name for entry in root.iterdir()
+            if entry.is_dir() and self._name.fullmatch(entry.name) and not self._exists(entry.name)
+        ))
+
+    def recreate(self, name: str) -> WorkstationStatus:
+        with self.locked():
+            status = self.container(name)
+            if not status.stale: raise WorkstationError("container image is still available; recreation is only needed for stale containers")
+            image = status.image_ref or status.image_id
+            if not image: raise WorkstationError("stale container has no recorded image reference")
+            ws = self._workstation(name)
+            raw = ws._container_status()
+            if raw == "running": self.docker.run(["stop", name])
+            if raw: self.docker.run(["rm", name])
+            selected = self.host_inventory.resolve_gpus(status.gpu_uuids, False)
+            self._ensure_gpus_available(tuple(gpu.uuid for gpu in selected))
+            ws.start(image=image, gpus=tuple(gpu.uuid for gpu in selected), all_gpus=False)
+            return self._status(name)
+
+    def ensure_desktop(self, name: str, password: str | None = None) -> DesktopEndpoint:
+        with self.locked():
+            status = self.container(name)
+            if status.state != "running":
+                self._ensure_gpus_available(status.gpu_uuids, excluding=name)
+            return self._workstation(name).ensure_desktop(password)
+
+    def reset_vnc_password(self, name: str, password: str) -> WorkstationStatus:
+        with self.locked():
+            status = self.container(name)
+            if status.state != "running":
+                self._ensure_gpus_available(status.gpu_uuids, excluding=name)
+            return self._workstation(name).reset_vnc_password(password)
+
+    def inventory(self) -> dict[str, object]:
+        host = self.host_inventory.inventory().public()
+        reservations = self._reserved_gpus()
+        host["gpus"] = [{**gpu, "reservation": reservations.get(str(gpu["uuid"])), "available": str(gpu["uuid"]) not in reservations} for gpu in host["gpus"]]  # type: ignore[index]
+        host["containers"] = [status.public() for status in self.containers()]
+        host["default_image"] = self.config.image or DEFAULT_IMAGE
+        return host
 
 
 def run_cli(action: str) -> int:

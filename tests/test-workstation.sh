@@ -26,30 +26,30 @@ run_ws() {
 run_ws image build >"$temporary_dir/output"
 grep -Fx 'docker-ws:u22.04-cu12.8.1-v1-desktop: image built' "$temporary_dir/output" >/dev/null
 grep -F -- '<|buildx|build|--platform|linux/amd64|--file|' "$temporary_dir/docker.log" >/dev/null
-grep -F -- '|assets/docker/Dockerfile|' "$temporary_dir/docker.log" >/dev/null
+grep -F -- '/assets/docker/Dockerfile|' "$temporary_dir/docker.log" >/dev/null
 
 : >"$temporary_dir/docker.log"
-run_ws status >"$temporary_dir/output"
+run_ws container status >"$temporary_dir/output"
 grep -Fx 'docker-ws: absent' "$temporary_dir/output" >/dev/null
 
 : >"$temporary_dir/docker.log"
-ROBOTICS_WS_DESKTOP_IMAGE=docker-ws:test-desktop ROBOTICS_WS_DESKTOP_NAME=test-workstation run_ws start >"$temporary_dir/output"
-grep -Fx 'test-workstation: created and running' "$temporary_dir/output" >/dev/null
+ROBOTICS_WS_DESKTOP_IMAGE=docker-ws:test-desktop ROBOTICS_WS_DESKTOP_NAME=test-workstation run_ws container start --gpu none >"$temporary_dir/output"
+grep -Fx 'test-workstation: running' "$temporary_dir/output" >/dev/null
 grep -F -- '|--name|test-workstation|' "$temporary_dir/docker.log" >/dev/null
 grep -F -- "src=$code_root,dst=/workspace" "$temporary_dir/docker.log" >/dev/null
 grep -F -- "src=$state_root,dst=/state" "$temporary_dir/docker.log" >/dev/null
 ! test -e "$vnc_password_file"
 
 : >"$temporary_dir/docker.log"
-ROBOTICS_WS_DESKTOP_IMAGE=docker-ws:test-desktop ROBOTICS_WS_DESKTOP_NAME=test-workstation run_ws enter
+ROBOTICS_WS_DESKTOP_IMAGE=docker-ws:test-desktop ROBOTICS_WS_DESKTOP_NAME=test-workstation run_ws container enter
 grep -F '<|exec|-it|--user|1234:5678|--workdir|/workspace|' "$temporary_dir/docker.log" >/dev/null
 
 ROBOTICS_WS_DESKTOP_IMAGE=docker-ws:test-desktop ROBOTICS_WS_DESKTOP_NAME=test-workstation \
-  ROBOTICS_WS_VNC_PASSWORD=test-password ROBOTICS_WS_VNCVIEWER="$fake_vncviewer" run_ws vnc
+  ROBOTICS_WS_VNC_PASSWORD=test-password ROBOTICS_WS_VNCVIEWER="$fake_vncviewer" run_ws container vnc
 test -e "$vnc_password_file"
 test -e "$temporary_dir/vnc-running"
 
-ROBOTICS_WS_DESKTOP_NAME=test-workstation run_ws stop >"$temporary_dir/output"
+ROBOTICS_WS_DESKTOP_NAME=test-workstation run_ws container stop >"$temporary_dir/output"
 grep -Fx 'test-workstation: stopped' "$temporary_dir/output" >/dev/null
-ROBOTICS_WS_DESKTOP_NAME=test-workstation run_ws status >"$temporary_dir/output"
+ROBOTICS_WS_DESKTOP_NAME=test-workstation run_ws container status >"$temporary_dir/output"
 grep -Fx 'test-workstation: stopped' "$temporary_dir/output" >/dev/null

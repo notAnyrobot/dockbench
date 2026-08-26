@@ -2,16 +2,26 @@
 from __future__ import annotations
 
 import asyncio
+import fcntl
+import json
 import logging
+import os
+import pty
+import re
 import secrets
+import struct
+import tempfile
+import termios
 import time
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Any
 
 from fastapi import Cookie, FastAPI, HTTPException, Request, Response, WebSocket, WebSocketDisconnect
 from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import FileResponse, JSONResponse
+from starlette.background import BackgroundTask
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
@@ -19,6 +29,7 @@ from docker_ws.core.defaults import DEFAULT_IMAGE
 from docker_ws.core.workstation import (
     Workstation,
     WorkstationError,
+    WorkstationGPUConflict,
     WorkstationRebuildRequired,
     WorkstationReplaceRequired,
 )
@@ -34,7 +45,33 @@ SESSION_TTL_SECONDS = 60
 class DesktopSession:
     port: int
     expires_at: float
+    container_name: str = "docker-ws"
     used: bool = False
+
+
+@dataclass
+class TerminalSession:
+    container_name: str
+    expires_at: float
+    used: bool = False
+
+
+@dataclass
+class ImageJob:
+    id: str
+    kind: str
+    state: str = "running"
+    message: str = ""
+    created_at: float = 0
+    logs: list[str] = field(default_factory=list)
+
+
+_SENSITIVE_LOG_VALUE = re.compile(r"(?i)\b(password|token|secret|authorization|cookie)\b\s*([=:])\s*[^\s,;]+")
+
+
+def _redact_image_log(value: str) -> str:
+    """Keep job logs useful without making the Workbench a secret sink."""
+    return _SENSITIVE_LOG_VALUE.sub(r"\1\2[REDACTED]", value)
 
 
 class SessionRequest(BaseModel):
@@ -52,19 +89,58 @@ class StartRequest(BaseModel):
     replace: bool = False
 
 
+class ContainerCreateRequest(BaseModel):
+    name: str = Field(min_length=1, max_length=96, pattern=r"[a-zA-Z0-9][a-zA-Z0-9_.-]*")
+    image: str = Field(min_length=1, max_length=512)
+    gpu_uuids: list[str] = Field(default_factory=list, max_length=64)
+    all_gpus: bool = False
+
+
+class ImageBuildRequest(BaseModel):
+    no_cache: bool = False
+
+
 class DesktopSessions:
     def __init__(self) -> None:
         self._sessions: dict[str, DesktopSession] = {}
         self._lock = asyncio.Lock()
 
-    async def create(self, port: int) -> str:
+    async def create(self, port: int, container_name: str = "docker-ws") -> str:
         async with self._lock:
             self._purge()
             session_id = secrets.token_urlsafe(32)
-            self._sessions[session_id] = DesktopSession(port, time.monotonic() + SESSION_TTL_SECONDS)
+            self._sessions[session_id] = DesktopSession(port, time.monotonic() + SESSION_TTL_SECONDS, container_name)
             return session_id
 
     async def consume(self, session_id: str) -> DesktopSession | None:
+        async with self._lock:
+            self._purge()
+            session = self._sessions.get(session_id)
+            if session is None or session.used:
+                return None
+            session.used = True
+            return session
+
+    def _purge(self) -> None:
+        now = time.monotonic()
+        self._sessions = {key: value for key, value in self._sessions.items() if value.expires_at > now and not value.used}
+
+
+class TerminalSessions:
+    """Short-lived capabilities so terminal WebSockets cannot name arbitrary containers."""
+
+    def __init__(self) -> None:
+        self._sessions: dict[str, TerminalSession] = {}
+        self._lock = asyncio.Lock()
+
+    async def create(self, container_name: str) -> str:
+        async with self._lock:
+            self._purge()
+            session_id = secrets.token_urlsafe(32)
+            self._sessions[session_id] = TerminalSession(container_name, time.monotonic() + SESSION_TTL_SECONDS)
+            return session_id
+
+    async def consume(self, session_id: str) -> TerminalSession | None:
         async with self._lock:
             self._purge()
             session = self._sessions.get(session_id)
@@ -95,6 +171,15 @@ def safe_error(exc: Exception) -> JSONResponse:
                 "correlation_id": correlation_id,
             },
         )
+    if isinstance(exc, WorkstationGPUConflict):
+        return JSONResponse(
+            status_code=409,
+            content={
+                "code": "gpu_reserved",
+                "message": f"GPU {exc.gpu_uuid} is reserved by running container {exc.owner}.",
+                "correlation_id": correlation_id,
+            },
+        )
     if isinstance(exc, WorkstationError):
         return JSONResponse(status_code=503, content={"code": "workstation_unavailable", "message": "Docker Workstation is unavailable. Check its status and try again.", "correlation_id": correlation_id})
     return JSONResponse(status_code=500, content={"code": "internal_error", "message": "Workbench could not complete the request.", "correlation_id": correlation_id})
@@ -113,11 +198,23 @@ def _require_csrf(request: Request, csrf_cookie: str | None) -> None:
         raise HTTPException(403, "Same-origin request required")
 
 
-def create_app(workstation: Workstation | None = None) -> FastAPI:
+def _issue_csrf(response: Response, current: str | None) -> str:
+    """Reuse the browser-wide token so opening another Workbench tab cannot invalidate it."""
+    token = current if current and 20 <= len(current) <= 256 else secrets.token_urlsafe(32)
+    response.set_cookie("workbench_csrf", token, httponly=False, samesite="strict", secure=False, path="/")
+    return token
+
+
+def create_app(workstation: Workstation | None = None, fleet: Any | None = None) -> FastAPI:
     app = FastAPI(title="Docker Workstation Workbench", docs_url=None, redoc_url=None, openapi_url=None)
     app.state.workstation = workstation
+    app.state.fleet = fleet
     app.state.sessions = DesktopSessions()
+    app.state.terminal_sessions = TerminalSessions()
     app.state.desktop_sockets: set[WebSocket] = set()
+    app.state.desktop_socket_containers: dict[WebSocket, str] = {}
+    app.state.image_jobs: dict[str, ImageJob] = {}
+    app.state.image_job_lock = asyncio.Lock()
 
     @app.middleware("http")
     async def security_headers(request: Request, call_next):
@@ -135,10 +232,42 @@ def create_app(workstation: Workstation | None = None) -> FastAPI:
     def ws() -> Workstation:
         return app.state.workstation or Workstation()
 
+    def managed_fleet() -> Any:
+        """Return the shared fleet manager without making legacy callers pay for it.
+
+        Tests and downstream embedders can inject a fleet directly.  Production
+        constructs one from the exact runner/configuration used by the legacy
+        default workstation, so the API cannot accidentally use a different
+        Docker context.
+        """
+        if app.state.fleet is not None:
+            return app.state.fleet
+        workstation = ws()
+        if not hasattr(workstation, "config"):
+            raise WorkstationError("managed fleet is unavailable")
+        try:
+            from docker_ws.core.workstation import FleetManager
+        except ImportError as exc:  # pragma: no cover - protects partial installs
+            raise WorkstationError("managed fleet is unavailable") from exc
+        app.state.fleet = FleetManager(workstation.config, runner=workstation.docker, inventory=workstation.inventory)
+        return app.state.fleet
+
+    def _public(status: Any) -> dict[str, Any]:
+        return status.public() if hasattr(status, "public") else dict(status)
+
+    async def _fleet_call(method: str, *args: Any, **kwargs: Any) -> Any:
+        return await run_in_threadpool(getattr(managed_fleet(), method), *args, **kwargs)
+
+    async def _close_desktop_sockets(container_name: str | None = None) -> None:
+        # Sessions are container-scoped.  A stopped/replaced container only
+        # disconnects its own VNC clients, never another desktop in the fleet.
+        for socket in tuple(app.state.desktop_sockets):
+            if container_name is None or app.state.desktop_socket_containers.get(socket) == container_name:
+                await socket.close(code=1012)
+
     @app.get("/api/workstation")
-    async def workstation_status(response: Response):
-        token = secrets.token_urlsafe(32)
-        response.set_cookie("workbench_csrf", token, httponly=False, samesite="strict", secure=False, path="/")
+    async def workstation_status(response: Response, workbench_csrf: str | None = Cookie(default=None)):
+        token = _issue_csrf(response, workbench_csrf)
         try:
             return {**ws().status().public(), "csrf_token": token}
         except Exception as exc:
@@ -147,10 +276,232 @@ def create_app(workstation: Workstation | None = None) -> FastAPI:
     @app.get("/api/host/inventory")
     async def host_inventory():
         try:
-            workstation = ws()
-            inventory = await run_in_threadpool(lambda: HostInventory(workstation.docker).inventory().public())
-            return {**inventory, "default_image": workstation.config.image or DEFAULT_IMAGE, "default_all_gpus": True}
+            return {**await inventory_with_reservations(), "default_all_gpus": True}
         except Exception as exc:
+            return safe_error(exc)
+
+    async def inventory_with_reservations() -> dict[str, Any]:
+        result = await _fleet_call("inventory")
+        # FleetManager owns reservation decisions.  The UI calls its display
+        # field `owner`; retain `reservation` for external consumers that used
+        # the core representation directly.
+        result["gpus"] = [{**gpu, "owner": gpu.get("reservation")} for gpu in result["gpus"]]
+        return result
+
+    def container_public(status: Any) -> dict[str, Any]:
+        result = _public(status)
+        result["name"] = result.get("container_name", "")
+        return result
+
+    @app.get("/api/containers")
+    async def containers(response: Response, workbench_csrf: str | None = Cookie(default=None)):
+        token = _issue_csrf(response, workbench_csrf)
+        try:
+            items = await _fleet_call("containers")
+            return {"containers": [container_public(item) for item in items], "csrf_token": token}
+        except Exception as exc:
+            return safe_error(exc)
+
+    @app.get("/api/containers/{name}")
+    async def container(name: str):
+        try:
+            return container_public(await _fleet_call("container", name))
+        except Exception as exc:
+            return safe_error(exc)
+
+    @app.post("/api/containers")
+    async def create_container(body: ContainerCreateRequest, request: Request, workbench_csrf: str | None = Cookie(default=None)):
+        _require_csrf(request, workbench_csrf)
+        try:
+            status = await _fleet_call("create", body.name, body.image, tuple(body.gpu_uuids), body.all_gpus)
+            return container_public(status)
+        except Exception as exc:
+            return safe_error(exc)
+
+    @app.post("/api/containers/{name}/start")
+    async def start_container(name: str, request: Request, workbench_csrf: str | None = Cookie(default=None)):
+        _require_csrf(request, workbench_csrf)
+        try:
+            return container_public(await _fleet_call("start", name))
+        except Exception as exc:
+            return safe_error(exc)
+
+    @app.post("/api/containers/{name}/stop")
+    async def stop_container(name: str, request: Request, workbench_csrf: str | None = Cookie(default=None)):
+        _require_csrf(request, workbench_csrf)
+        try:
+            status = await _fleet_call("stop", name)
+            await _close_desktop_sockets(name)
+            return container_public(status)
+        except Exception as exc:
+            return safe_error(exc)
+
+    @app.post("/api/containers/{name}/remove")
+    async def remove_container(name: str, request: Request, workbench_csrf: str | None = Cookie(default=None)):
+        _require_csrf(request, workbench_csrf)
+        try:
+            await _fleet_call("remove", name)
+            await _close_desktop_sockets(name)
+            return {"removed": True, "name": name}
+        except Exception as exc:
+            return safe_error(exc)
+
+    @app.delete("/api/containers/{name}")
+    async def remove_container_delete(name: str, request: Request, workbench_csrf: str | None = Cookie(default=None)):
+        return await remove_container(name, request, workbench_csrf)
+
+    @app.delete("/api/containers/{name}/state")
+    async def delete_container_state(name: str, request: Request, workbench_csrf: str | None = Cookie(default=None)):
+        _require_csrf(request, workbench_csrf)
+        try:
+            await _fleet_call("delete_state", name)
+            return {"state_deleted": True, "name": name}
+        except Exception as exc:
+            return safe_error(exc)
+
+    @app.get("/api/container-states")
+    async def container_states():
+        try:
+            names = await _fleet_call("orphaned_states")
+            return {"container_states": [{"name": name} for name in names]}
+        except Exception as exc:
+            return safe_error(exc)
+
+    @app.post("/api/containers/{name}/recreate")
+    async def recreate_container(name: str, request: Request, workbench_csrf: str | None = Cookie(default=None)):
+        _require_csrf(request, workbench_csrf)
+        try:
+            status = await _fleet_call("recreate", name)
+            await _close_desktop_sockets(name)
+            return container_public(status)
+        except Exception as exc:
+            return safe_error(exc)
+
+    @app.get("/api/images")
+    async def images():
+        try:
+            data = await inventory_with_reservations()
+            containers = await _fleet_call("containers")
+            dependents: dict[str, list[str]] = {}
+            stale: dict[str, list[str]] = {}
+            for item in containers:
+                image_id = item.image_id
+                if image_id:
+                    dependents.setdefault(image_id, []).append(item.container_name)
+                    if getattr(item, "stale", False): stale.setdefault(image_id, []).append(item.container_name)
+            data["images"] = [{**image, "dependent_containers": dependents.get(str(image["id"]), []), "stale_dependents": stale.get(str(image["id"]), [])} for image in data["images"]]
+            return {"images": data["images"]}
+        except Exception as exc:
+            return safe_error(exc)
+
+    @app.get("/api/gpus")
+    async def gpus():
+        try:
+            data = await inventory_with_reservations()
+            return {"gpus": data["gpus"], "gpu_diagnostic": data["gpu_diagnostic"]}
+        except Exception as exc:
+            return safe_error(exc)
+
+    def start_image_job(kind: str, operation: Any) -> ImageJob:
+        queued = app.state.image_job_lock.locked()
+        job = ImageJob(uuid.uuid4().hex, kind, state="queued" if queued else "running",
+                       message="Waiting for another image operation." if queued else "Starting image operation.",
+                       created_at=time.time(), logs=["queued" if queued else "starting"])
+        app.state.image_jobs[job.id] = job
+
+        async def run() -> None:
+            async with app.state.image_job_lock:
+                job.state = "running"
+                job.message = "Image operation is running."
+                job.logs.append("running")
+                try:
+                    output = await run_in_threadpool(operation)
+                except Exception as exc:
+                    LOG.warning("image job failed id=%s kind=%s error=%s", job.id, kind, type(exc).__name__)
+                    job.state = "failed"
+                    job.message = "Image operation failed. Check Docker Workstation logs and try again."
+                    job.logs.append("failed")
+                else:
+                    if output:
+                        job.logs.extend(_redact_image_log(str(output)).splitlines())
+                    job.state = "completed"
+                    job.message = "Image operation completed."
+                    job.logs.append("completed")
+
+        asyncio.create_task(run())
+        return job
+
+    @app.post("/api/images/build")
+    async def build_image(body: ImageBuildRequest, request: Request, workbench_csrf: str | None = Cookie(default=None)):
+        _require_csrf(request, workbench_csrf)
+        try:
+            manager = managed_fleet()
+            config = manager.config
+            image = config.image or DEFAULT_IMAGE
+
+            def build() -> None:
+                args = ["buildx", "build", "--platform", "linux/amd64", "--file", str(config.repository_root / "assets/docker/Dockerfile"), "--target", "desktop", "--load", "--tag", image]
+                if body.no_cache:
+                    args.append("--no-cache")
+                return manager.docker.run(args + [str(config.repository_root)], capture=True)
+
+            job = start_image_job("build", build)
+            return {"id": job.id, "kind": job.kind, "state": job.state}
+        except Exception as exc:
+            return safe_error(exc)
+
+    @app.get("/api/image-jobs/{job_id}")
+    async def image_job(job_id: str):
+        job = app.state.image_jobs.get(job_id)
+        if job is None:
+            raise HTTPException(404, "Image job not found")
+        return {"id": job.id, "kind": job.kind, "state": job.state, "message": job.message,
+                "created_at": job.created_at, "logs": job.logs}
+
+    @app.post("/api/images/load")
+    async def load_image(request: Request, workbench_csrf: str | None = Cookie(default=None)):
+        _require_csrf(request, workbench_csrf)
+        temporary = tempfile.NamedTemporaryFile(prefix="docker-ws-image-", suffix=".tar", delete=False)
+        temporary_path = Path(temporary.name)
+        try:
+            async for chunk in request.stream():
+                temporary.write(chunk)
+            temporary.close()
+            if temporary_path.stat().st_size == 0:
+                temporary_path.unlink(missing_ok=True)
+                raise HTTPException(422, "Image archive is empty")
+            manager = managed_fleet()
+
+            def load() -> None:
+                try:
+                    return manager.docker.run(["image", "load", "--input", str(temporary_path)], capture=True)
+                finally:
+                    temporary_path.unlink(missing_ok=True)
+
+            job = start_image_job("load", load)
+            return {"id": job.id, "kind": job.kind, "state": job.state}
+        except HTTPException:
+            raise
+        except Exception as exc:
+            temporary.close()
+            temporary_path.unlink(missing_ok=True)
+            return safe_error(exc)
+
+    @app.get("/api/images/{image_id}/package")
+    async def package_image(image_id: str):
+        temporary_path: Path | None = None
+        try:
+            manager = managed_fleet()
+            image = await run_in_threadpool(HostInventory(manager.docker).resolve_image, image_id)
+            temporary = tempfile.NamedTemporaryFile(prefix="docker-ws-image-", suffix=".tar", delete=False)
+            temporary_path = Path(temporary.name)
+            temporary.close()
+            await run_in_threadpool(manager.docker.run, ["image", "save", "--output", str(temporary_path), image.id])
+            filename = f"{image.display_reference.replace('/', '_').replace(':', '_')}.tar"
+            return FileResponse(temporary_path, media_type="application/x-tar", filename=filename, background=BackgroundTask(temporary_path.unlink, missing_ok=True))
+        except Exception as exc:
+            if temporary_path is not None:
+                temporary_path.unlink(missing_ok=True)
             return safe_error(exc)
 
     @app.post("/api/workstation/start")
@@ -190,6 +541,36 @@ def create_app(workstation: Workstation | None = None) -> FastAPI:
         except Exception as exc:
             return safe_error(exc)
 
+    @app.post("/api/containers/{name}/desktop/sessions")
+    async def create_container_desktop_session(name: str, body: SessionRequest, request: Request, workbench_csrf: str | None = Cookie(default=None)):
+        _require_csrf(request, workbench_csrf)
+        try:
+            endpoint = await _fleet_call("ensure_desktop", name, body.password)
+            session_id = await app.state.sessions.create(endpoint.port, name)
+            return {"session_id": session_id, "expires_in": SESSION_TTL_SECONDS}
+        except Exception as exc:
+            return safe_error(exc)
+
+    @app.post("/api/containers/{name}/desktop/password")
+    async def reset_container_desktop_password(name: str, body: PasswordResetRequest, request: Request, workbench_csrf: str | None = Cookie(default=None)):
+        _require_csrf(request, workbench_csrf)
+        try:
+            return container_public(await _fleet_call("reset_vnc_password", name, body.password))
+        except Exception as exc:
+            return safe_error(exc)
+
+    @app.post("/api/containers/{name}/terminals")
+    async def create_terminal(name: str, request: Request, workbench_csrf: str | None = Cookie(default=None)):
+        _require_csrf(request, workbench_csrf)
+        try:
+            status = await _fleet_call("container", name)
+            if status.state != "running":
+                raise WorkstationError("container is not running; start it before opening a terminal")
+            session_id = await app.state.terminal_sessions.create(name)
+            return {"session_id": session_id, "expires_in": SESSION_TTL_SECONDS}
+        except Exception as exc:
+            return safe_error(exc)
+
     @app.websocket("/api/desktop/sessions/{session_id}/ws")
     async def desktop_proxy(socket: WebSocket, session_id: str):
         host = socket.headers.get("host", "")
@@ -201,6 +582,7 @@ def create_app(workstation: Workstation | None = None) -> FastAPI:
             await socket.close(code=1008); return
         await socket.accept()
         app.state.desktop_sockets.add(socket)
+        app.state.desktop_socket_containers[socket] = session.container_name
         writer = None
         tasks: list[asyncio.Task[None]] = []
         try:
@@ -230,10 +612,135 @@ def create_app(workstation: Workstation | None = None) -> FastAPI:
             if tasks:
                 await asyncio.gather(*tasks, return_exceptions=True)
             app.state.desktop_sockets.discard(socket)
+            app.state.desktop_socket_containers.pop(socket, None)
             if writer is not None:
                 writer.close()
                 try: await writer.wait_closed()
                 except OSError: pass
+
+    @app.websocket("/api/containers/{name}/desktop/sessions/{session_id}/ws")
+    async def container_desktop_proxy(socket: WebSocket, name: str, session_id: str):
+        host = socket.headers.get("host", "")
+        if socket.headers.get("origin") != f"http://{host}":
+            await socket.close(code=1008); return
+        session = await app.state.sessions.consume(session_id)
+        if session is None or session.container_name != name:
+            await socket.close(code=1008); return
+        await socket.accept()
+        app.state.desktop_sockets.add(socket)
+        app.state.desktop_socket_containers[socket] = name
+        writer = None
+        tasks: list[asyncio.Task[None]] = []
+        try:
+            reader, writer = await asyncio.open_connection("127.0.0.1", session.port)
+
+            async def browser_to_vnc() -> None:
+                while True:
+                    message = await socket.receive()
+                    if message["type"] == "websocket.disconnect": return
+                    payload = message.get("bytes")
+                    if payload is not None:
+                        writer.write(payload)
+                        await writer.drain()
+
+            async def vnc_to_browser() -> None:
+                while data := await reader.read(65536):
+                    await socket.send_bytes(data)
+
+            tasks = [asyncio.create_task(browser_to_vnc()), asyncio.create_task(vnc_to_browser())]
+            await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
+        except WebSocketDisconnect:
+            pass
+        except OSError:
+            await socket.close(code=1011)
+        finally:
+            for task in tasks:
+                if not task.done(): task.cancel()
+            if tasks:
+                await asyncio.gather(*tasks, return_exceptions=True)
+            app.state.desktop_sockets.discard(socket)
+            app.state.desktop_socket_containers.pop(socket, None)
+            if writer is not None:
+                writer.close()
+                try: await writer.wait_closed()
+                except OSError: pass
+
+    @app.websocket("/api/terminals/{session_id}/ws")
+    async def terminal_proxy(socket: WebSocket, session_id: str):
+        host = socket.headers.get("host", "")
+        if socket.headers.get("origin") != f"http://{host}":
+            await socket.close(code=1008); return
+        session = await app.state.terminal_sessions.consume(session_id)
+        if session is None:
+            await socket.close(code=1008); return
+        master_fd, slave_fd = pty.openpty()
+        try:
+            config = managed_fleet().config
+            process = await asyncio.create_subprocess_exec(
+                config.docker_command, "exec", "-it", "--user", "root", "--workdir", "/workspace",
+                session.container_name, "/bin/sh", "-lc",
+                "if command -v bash >/dev/null 2>&1; then exec bash -l; else exec /bin/sh; fi",
+                stdin=slave_fd, stdout=slave_fd, stderr=slave_fd, preexec_fn=os.setsid,
+            )
+        except (OSError, WorkstationError):
+            os.close(master_fd); os.close(slave_fd)
+            await socket.close(code=1011); return
+        os.close(slave_fd)
+        await socket.accept()
+        tasks: list[asyncio.Task[None]] = []
+        try:
+            def resize(rows: int, columns: int) -> None:
+                if not 1 <= rows <= 1000 or not 1 <= columns <= 1000:
+                    return
+                fcntl.ioctl(master_fd, termios.TIOCSWINSZ, struct.pack("HHHH", rows, columns, 0, 0))
+
+            async def browser_to_shell() -> None:
+                while True:
+                    message = await socket.receive()
+                    if message["type"] == "websocket.disconnect": return
+                    raw = message.get("text")
+                    if raw is None:
+                        continue
+                    try:
+                        message_data = json.loads(raw)
+                    except json.JSONDecodeError:
+                        message_data = raw
+                    if isinstance(message_data, dict) and message_data.get("type") == "resize":
+                        try:
+                            resize(int(message_data.get("rows", 0)), int(message_data.get("cols", 0)))
+                        except (TypeError, ValueError):
+                            pass
+                        continue
+                    data = message_data.get("data", raw) if isinstance(message_data, dict) else message_data
+                    if not isinstance(data, str):
+                        continue
+                    os.write(master_fd, data.encode())
+
+            async def shell_to_browser() -> None:
+                while True:
+                    try:
+                        data = await asyncio.to_thread(os.read, master_fd, 65536)
+                    except OSError:
+                        return
+                    if not data:
+                        return
+                    await socket.send_text(data.decode(errors="replace"))
+
+            tasks = [asyncio.create_task(browser_to_shell()), asyncio.create_task(shell_to_browser())]
+            await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
+        except WebSocketDisconnect:
+            pass
+        finally:
+            for task in tasks:
+                if not task.done(): task.cancel()
+            if tasks:
+                await asyncio.gather(*tasks, return_exceptions=True)
+            try: os.close(master_fd)
+            except OSError: pass
+            if process.returncode is None:
+                process.terminate()
+                try: await asyncio.wait_for(process.wait(), timeout=2)
+                except asyncio.TimeoutError: process.kill()
 
     if WEB_DIST.is_dir():
         app.mount("/assets", StaticFiles(directory=WEB_DIST / "assets"), name="assets")
