@@ -2,7 +2,7 @@
 
 from pathlib import Path
 
-DEFAULT_IMAGE = "android-ws:u22.04-cu12.8-v1"
+DEFAULT_IMAGE = "android-ws:u22.04-cu12.8-v2"
 
 
 def default_workspace(*, home: Path | None = None, data_root: Path = Path("/data")) -> Path:

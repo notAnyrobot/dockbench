@@ -16,7 +16,7 @@ from pathlib import Path
 from typing import Iterable, Protocol
 
 from docker_ws.core.defaults import DEFAULT_IMAGE, default_workspace
-from docker_ws.core.errors import WorkstationError, WorkstationGPUConflict, WorkstationRebuildRequired, WorkstationReplaceRequired
+from docker_ws.core.errors import DockerCommandError, WorkstationError, WorkstationGPUConflict, WorkstationRebuildRequired, WorkstationReplaceRequired
 from docker_ws.core.host_inventory import HostInventory
 
 
@@ -29,9 +29,10 @@ class SubprocessDockerRunner:
     def __init__(self, command: str) -> None: self.command = command
     def run(self, args: list[str], *, input: str | None = None, capture: bool = False, check: bool = True) -> str:
         try:
-            result = subprocess.run([self.command, *args], input=input, text=True, stdout=subprocess.PIPE if capture else None, stderr=subprocess.PIPE if capture else None, check=False)
+            result = subprocess.run([self.command, *args], input=input, text=True, stdout=subprocess.PIPE if capture else None, stderr=subprocess.PIPE, check=False)
         except FileNotFoundError as exc: raise WorkstationError(f"Docker command not found: {self.command}") from exc
-        if check and result.returncode: raise WorkstationError((result.stderr or "").strip() if capture else f"Docker command failed ({result.returncode})")
+        if check and result.returncode:
+            raise DockerCommandError((result.stderr or "").strip() or f"Docker command failed ({result.returncode})")
         return result.stdout.strip() if capture else ""
 
 
@@ -218,7 +219,7 @@ chown "$requested_uid:$requested_gid" /state/.robotics-ws-bashrc
     def build(self) -> None:
         image = self.config.image or DEFAULT_IMAGE
         recipe_dir = self.config.repository_root / "assets" / "images" / "android-ws"
-        self.docker.run(["buildx", "build", "--platform", "linux/amd64", "--file", str(recipe_dir / "Dockerfile.android-ws-v1"), "--target", "desktop", "--load", "--tag", image, str(recipe_dir)])
+        self.docker.run(["buildx", "build", "--platform", "linux/amd64", "--file", str(recipe_dir / "Dockerfile.android-ws-v2"), "--target", "desktop", "--load", "--tag", image, str(recipe_dir)])
         print(f"{image}: image built")
     def rebuild(self) -> WorkstationStatus:
         self.build(); return self.start(image=self.config.image or DEFAULT_IMAGE, replace=True)
@@ -462,20 +463,45 @@ class FleetManager:
             if gpu in reservations:
                 raise WorkstationGPUConflict(gpu, reservations[gpu])
 
+    def _remove_failed_created_container(self, name: str) -> None:
+        """Remove only a managed container that Docker left in ``Created`` state.
+
+        A failed ``docker run`` or ``docker start`` can leave a named container
+        behind before its process starts.  The managed-label check prevents this
+        recovery path from removing a user container that happens to share a
+        Workbench name.  Persistent state is deliberately left intact.
+        """
+        try:
+            if self._workstation(name)._container_status() != "created":
+                return
+            if name not in self._managed_names():
+                return
+            self.docker.run(["rm", name])
+        except WorkstationError:
+            # Cleanup must never hide the startup failure that prompted it.
+            return
+
+    def _start_with_created_cleanup(self, name: str, **kwargs: object) -> WorkstationStatus:
+        try:
+            return self._workstation(name).start(**kwargs)
+        except Exception:
+            self._remove_failed_created_container(name)
+            raise
+
     def create(self, name: str, image: str, gpu_uuids: tuple[str, ...] = (), all_gpus: bool = False) -> WorkstationStatus:
         name = self._validate_name(name)
         with self.locked():
             if self._exists(name): raise WorkstationError(f"container already exists: {name}")
             selected = self.host_inventory.resolve_gpus(gpu_uuids, all_gpus)
             self._ensure_gpus_available(tuple(gpu.uuid for gpu in selected))
-            self._workstation(name).start(image=image, gpus=tuple(gpu.uuid for gpu in selected), all_gpus=False)
+            self._start_with_created_cleanup(name, image=image, gpus=tuple(gpu.uuid for gpu in selected), all_gpus=False)
             return self._status(name)
 
     def start(self, name: str) -> WorkstationStatus:
         with self.locked():
             status = self.container(name)
             self._ensure_gpus_available(status.gpu_uuids, excluding=name)
-            self._workstation(name).start()
+            self._start_with_created_cleanup(name)
             return self._status(name)
 
     def stop(self, name: str) -> WorkstationStatus:
@@ -519,7 +545,7 @@ class FleetManager:
             if raw: self.docker.run(["rm", name])
             selected = self.host_inventory.resolve_gpus(status.gpu_uuids, False)
             self._ensure_gpus_available(tuple(gpu.uuid for gpu in selected))
-            ws.start(image=image, gpus=tuple(gpu.uuid for gpu in selected), all_gpus=False)
+            self._start_with_created_cleanup(name, image=image, gpus=tuple(gpu.uuid for gpu in selected), all_gpus=False)
             return self._status(name)
 
     def ensure_desktop(self, name: str, password: str | None = None) -> DesktopEndpoint:
@@ -527,14 +553,22 @@ class FleetManager:
             status = self.container(name)
             if status.state != "running":
                 self._ensure_gpus_available(status.gpu_uuids, excluding=name)
-            return self._workstation(name).ensure_desktop(password)
+            try:
+                return self._workstation(name).ensure_desktop(password)
+            except Exception:
+                self._remove_failed_created_container(name)
+                raise
 
     def reset_vnc_password(self, name: str, password: str) -> WorkstationStatus:
         with self.locked():
             status = self.container(name)
             if status.state != "running":
                 self._ensure_gpus_available(status.gpu_uuids, excluding=name)
-            return self._workstation(name).reset_vnc_password(password)
+            try:
+                return self._workstation(name).reset_vnc_password(password)
+            except Exception:
+                self._remove_failed_created_container(name)
+                raise
 
     def inventory(self) -> dict[str, object]:
         host = self.host_inventory.inventory().public()

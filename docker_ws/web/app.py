@@ -26,6 +26,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from docker_ws.core.defaults import DEFAULT_IMAGE
+from docker_ws.core.errors import DockerCommandError
 from docker_ws.core.workstation import (
     Workstation,
     WorkstationError,
@@ -68,11 +69,38 @@ class ImageJob:
 
 
 _SENSITIVE_LOG_VALUE = re.compile(r"(?i)\b(password|token|secret|authorization|cookie)\b\s*([=:])\s*[^\s,;]+")
+_SENSITIVE_DOCKER_VALUE = re.compile(
+    r"(?i)\b(password|token|secret|authorization|cookie|credential|api[_-]?key)\b\s*([=:])\s*(?:\"[^\"]*\"|'[^']*'|[^\s,;]+)"
+)
+_DOCKER_ERROR_PREFIX = re.compile(r"(?i)^(?:docker:\s*)?(?:error response from daemon:\s*)+")
+_ABSOLUTE_PATH = re.compile(r"(?<![\w.-])/(?:[^\s/'\"`]+/?)+")
+_ANSI_ESCAPE = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
 
 
 def _redact_image_log(value: str) -> str:
     """Keep job logs useful without making the Workbench a secret sink."""
     return _SENSITIVE_LOG_VALUE.sub(r"\1\2[REDACTED]", value)
+
+
+def _safe_docker_error(value: str) -> str:
+    """Turn an untrusted Docker daemon message into a brief UI-safe cause.
+
+    Daemon stderr can include credentials, socket or host paths, and verbose
+    diagnostics.  Keep the human-readable cause while redacting those details,
+    collapsing it to one bounded line, and append a consistent next step.
+    """
+    cause = _ANSI_ESCAPE.sub("", value)
+    cause = _DOCKER_ERROR_PREFIX.sub("", " ".join(cause.split()))
+    cause = _SENSITIVE_DOCKER_VALUE.sub(r"\1\2[REDACTED]", cause)
+    cause = _ABSOLUTE_PATH.sub("[PATH]", cause).strip(" .")
+    if not cause:
+        cause = "Docker did not provide a usable failure reason"
+    if len(cause) > 300:
+        cause = f"{cause[:297].rstrip()}..."
+    return (
+        f"Docker could not complete the request: {cause}. "
+        "Check that Docker is running and that the selected image and resources are available, then try again."
+    )
 
 
 class SessionRequest(BaseModel):
@@ -201,6 +229,15 @@ def safe_error(exc: Exception) -> JSONResponse:
             content={
                 "code": "gpu_reserved",
                 "message": f"GPU {exc.gpu_uuid} is reserved by running container {exc.owner}.",
+                "correlation_id": correlation_id,
+            },
+        )
+    if isinstance(exc, DockerCommandError):
+        return JSONResponse(
+            status_code=503,
+            content={
+                "code": "docker_error",
+                "message": _safe_docker_error(str(exc)),
                 "correlation_id": correlation_id,
             },
         )

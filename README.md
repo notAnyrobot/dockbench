@@ -7,6 +7,11 @@ the installable `docker_ws` Python package; `apps/workbench` is the browser UI.
 Projects, environments, data, and credentials remain on host mounts; this
 repository deliberately contains no project checkout or credential material.
 
+Recipe revision 2 pulls its CUDA base directly from NVIDIA NGC
+(`nvcr.io/nvidia/cuda`) and uses BuildKit's bundled Dockerfile frontend, so the
+recipe no longer depends on Docker Hub. Other build steps still require their
+documented upstream package and source hosts.
+
 The bundled desktop image is optional: `docker-ws` launches any tagged local
 image that provides `/bin/sh` and `sleep`. The managed container name and
 hostname default to `docker-ws`. Existing `ROBOTICS_WS_*` configuration
@@ -32,8 +37,8 @@ The same recipe can be built directly without `docker-ws`:
 
 ```bash
 docker buildx build --platform linux/amd64 \
-  --file assets/images/android-ws/Dockerfile.android-ws-v1 \
-  --target desktop --load --tag android-ws:u22.04-cu12.8-v1 \
+  --file assets/images/android-ws/Dockerfile.android-ws-v2 \
+  --target desktop --load --tag android-ws:u22.04-cu12.8-v2 \
   assets/images/android-ws
 ```
 
@@ -43,7 +48,7 @@ advertises it:
 
 ```bash
 uv run docker-ws image build --no-cache
-uv run docker-ws image verify android-ws:u22.04-cu12.8-v1
+uv run docker-ws image verify android-ws:u22.04-cu12.8-v2
 ```
 
 `image build` leaves an existing container untouched. To build the image and
@@ -64,7 +69,7 @@ uv run docker-ws container start --image YOUR_IMAGE --gpu 0 --gpu GPU-UUID
 uv run docker-ws container enter
 ```
 
-The default launch uses `android-ws:u22.04-cu12.8-v1` and all reported
+The default launch uses `android-ws:u22.04-cu12.8-v2` and all reported
 GPUs. Use `--gpu none` for CPU-only operation, or repeat `--gpu` to select a
 specific subset. A running managed container is immutable: changing its image or GPUs
 requires `--replace`, which retains `/workspace` and `/state` but discards
@@ -154,6 +159,50 @@ command prerequisites are listed in [`dependencies.txt`](dependencies.txt);
 Python and Python-package dependencies remain exclusively managed by `uv`
 through `pyproject.toml` and `uv.lock`.
 
+#### Rootless Docker with NVIDIA GPUs
+
+NVIDIA GPU containers require an additional one-time setup when Docker runs in
+rootless mode. First, the Docker user registers the NVIDIA runtime with their
+own daemon and restarts that daemon:
+
+```bash
+nvidia-ctk runtime configure \
+  --runtime=docker \
+  --config="$HOME/.config/docker/daemon.json"
+systemctl --user restart docker
+```
+
+An administrator must then configure NVIDIA Container Toolkit not to modify
+cgroup device rules, because a rootless daemon does not have permission to
+perform those operations:
+
+```bash
+sudo nvidia-ctk config \
+  --set nvidia-container-cli.no-cgroups \
+  --in-place
+grep -n 'no-cgroups' /etc/nvidia-container-runtime/config.toml
+```
+
+The expected setting is `no-cgroups = true`. This file is host-global, so
+coordinate the change with the host administrator on a shared machine:
+rootful NVIDIA workloads can require different cgroup handling. The setting
+does not disable Docker's CPU or memory cgroups, but it does disable NVIDIA
+Toolkit's cgroup device-rule enforcement. Workbench GPU reservations coordinate
+only containers managed by that Workbench instance; they do not provide
+exclusive allocation across users or independent Docker daemons.
+
+Restart the rootless Docker daemon after either configuration changes and
+verify GPU injection before deploying workloads:
+
+```bash
+systemctl --user restart docker
+docker run --rm --gpus all nvcr.io/nvidia/cuda:12.8.1-base-ubuntu22.04 nvidia-smi
+```
+
+See NVIDIA's
+[rootless Docker installation instructions](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/install-guide.html#rootless-mode)
+for the authoritative host setup.
+
 Then build and deploy Workbench with:
 
 ```bash
@@ -188,27 +237,28 @@ exposed to the network and no public authentication surface is added.
 ### Local browser connection
 
 On the local machine, where Docker is not required, use the same CLI to create
-the SSH tunnel, wait for Workbench readiness, and open the browser:
+the SSH tunnel and wait for Workbench readiness:
 
 ```bash
 uv run docker-ws workbench connect USER@HPC_HOST
 ```
 
-The local browser opens a `127.0.0.1` URL through the foreground SSH tunnel.
-Keep this command running while using Workbench; press Ctrl+C to close the
-tunnel. `connect` uses your normal SSH configuration, so aliases, identity
+Open the printed `127.0.0.1` URL in your local browser. Keep this command
+running while using Workbench; press Ctrl+C to close the tunnel. `connect` uses
+your normal SSH configuration, so aliases, identity
 files, nonstandard ports, and bastion hosts via `ProxyJump` work unchanged. For
 example:
 
 ```bash
 uv run docker-ws workbench connect research-hpc
-uv run docker-ws workbench connect research-hpc --local-port 9878 --remote-port 8787 --no-open
+uv run docker-ws workbench connect research-hpc --local-port 9878 --remote-port 8787
+uv run docker-ws workbench connect research-hpc --open-browser
 ```
 
 When the default local port is occupied, `connect` selects a free local port;
-an explicitly requested busy `--local-port` fails instead. `--no-open` prints
-the local URL without launching a browser. `workbench serve` remains available
-for foreground development or direct use on the Docker host. The legacy
+an explicitly requested busy `--local-port` fails instead. The browser is not
+opened automatically; `--open-browser` opts into that behavior. `workbench
+serve` remains available for foreground development or direct use on the Docker host. The legacy
 `service install` command remains a compatibility alias for deployment.
 
 ### Remote acceptance flow

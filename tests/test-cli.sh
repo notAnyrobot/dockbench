@@ -20,7 +20,7 @@ grep -F -- '--workspace' "$temporary_dir/deploy-help" >/dev/null
 ! grep -F -- '--code-root' "$temporary_dir/deploy-help" >/dev/null
 
 uv run --no-sync docker-ws image recipe list >"$temporary_dir/recipes"
-grep -F $'android-ws\tv1\tandroid-ws:u22.04-cu12.8-v1' "$temporary_dir/recipes" >/dev/null
+grep -F $'android-ws\tv2\tandroid-ws:u22.04-cu12.8-v2' "$temporary_dir/recipes" >/dev/null
 
 FAKE_DOCKER_LOG="$temporary_dir/docker.log" FAKE_DOCKER_STATE="$temporary_dir/docker.state" \
   ROBOTICS_WS_DOCKER="$PWD/tests/helpers/fake-docker" \

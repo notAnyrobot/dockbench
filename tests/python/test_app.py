@@ -11,6 +11,7 @@ from docker_ws.core.workstation import (
     WorkstationStatus,
 )
 from docker_ws.core.errors import WorkstationGPUConflict
+from docker_ws.core.errors import DockerCommandError
 from docker_ws.web.app import DesktopSessions, _redact_image_log, create_app
 from docker_ws.core.recipes import RecipeError
 
@@ -142,6 +143,29 @@ def test_workstation_errors_are_redacted_from_the_response():
     assert response.status_code == 503
     assert response.json()["message"] == "Docker Workstation is unavailable. Check its status and try again."
     assert "secret" not in response.text
+
+
+def test_docker_errors_include_a_sanitized_cause_and_remediation():
+    class FailingWorkstation(FakeWorkstation):
+        def start(self):
+            raise DockerCommandError(
+                "docker: Error response from daemon: failed to create task: "
+                "insufficient memory; token=super-secret; socket=/run/user/1000/docker.sock"
+            )
+
+    client = TestClient(create_app(FailingWorkstation()))
+    status = client.get("/api/workstation")
+    response = client.post(
+        "/api/workstation/start",
+        headers={"origin": "http://testserver", "x-csrf-token": status.json()["csrf_token"]},
+    )
+
+    assert response.status_code == 503
+    assert response.json()["code"] == "docker_error"
+    assert "insufficient memory" in response.json()["message"]
+    assert "Check that Docker is running" in response.json()["message"]
+    assert "super-secret" not in response.text
+    assert "/run/user/1000/docker.sock" not in response.text
 
 
 def test_stale_workstation_returns_actionable_rebuild_error():

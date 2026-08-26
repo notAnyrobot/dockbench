@@ -1,11 +1,12 @@
 from pathlib import Path
+import subprocess
 
 import pytest
 
-from docker_ws.core.errors import WorkstationError, WorkstationReplaceRequired
+from docker_ws.core.errors import DockerCommandError, WorkstationError, WorkstationReplaceRequired
 from docker_ws.core.defaults import DEFAULT_IMAGE
 from docker_ws.core.host_inventory import GPU, LocalImage
-from docker_ws.core.workstation import Workstation, WorkstationConfig
+from docker_ws.core.workstation import SubprocessDockerRunner, Workstation, WorkstationConfig
 
 
 class FakeInventory:
@@ -73,6 +74,21 @@ def test_config_prefers_workspace_environment_and_accepts_legacy_code_root(tmp_p
     result = WorkstationConfig.from_environment(tmp_path)
 
     assert result.workspace_root == tmp_path / expected
+
+
+def test_docker_runner_retains_daemon_stderr_for_sanitized_workbench_errors(monkeypatch):
+    calls = []
+
+    def failed_run(*args, **kwargs):
+        calls.append((args, kwargs))
+        return subprocess.CompletedProcess(args[0], 1, stderr="Error response from daemon: insufficient memory")
+
+    monkeypatch.setattr("docker_ws.core.workstation.subprocess.run", failed_run)
+
+    with pytest.raises(DockerCommandError, match="insufficient memory"):
+        SubprocessDockerRunner("docker").run(["run", "example:image"])
+
+    assert calls[0][1]["stderr"] is subprocess.PIPE
 
 
 def test_creation_defaults_to_desktop_image_and_all_gpus(tmp_path):

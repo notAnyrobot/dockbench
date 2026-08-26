@@ -239,7 +239,9 @@ def parser() -> argparse.ArgumentParser:
     connect.add_argument("ssh_host", help="SSH host, user@host, or configured SSH alias.")
     connect.add_argument("--local-port", type=_port, default=None, help="Explicit local loopback port; defaults to an available port.")
     connect.add_argument("--remote-port", type=_port, default=DEFAULT_WORKBENCH_PORT, help="Remote Workbench loopback port.")
-    connect.add_argument("--no-open", action="store_true", help="Do not open the local browser automatically.")
+    browser = connect.add_mutually_exclusive_group()
+    browser.add_argument("--open-browser", action="store_true", help="Open the local URL in the default browser after connecting.")
+    browser.add_argument("--no-open", dest="open_browser", action="store_false", help=argparse.SUPPRESS)
     workbench_actions.add_parser("start", help="Start an already deployed Workbench service without rebuilding.")
     workbench_actions.add_parser("status", help="Show deployed Workbench service status.")
     workbench_actions.add_parser("stop", help="Stop the deployed Workbench service.")
@@ -325,7 +327,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         if action == "deploy":
             return _deploy_workbench(arguments.port, arguments.workspace, arguments.state_root, arguments.docker_command)
         if action == "connect":
-            return _connect_workbench(arguments.ssh_host, arguments.local_port, arguments.remote_port, not arguments.no_open)
+            return _connect_workbench(arguments.ssh_host, arguments.local_port, arguments.remote_port, arguments.open_browser)
         return _workbench_status(action)
     if arguments.command == "image":
         if arguments.image_action == "help":

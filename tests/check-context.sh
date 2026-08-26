@@ -5,6 +5,7 @@ cd "$(dirname "$0")/.."
 for file in .dockerignore pyproject.toml dependencies.txt scripts/bootstrap.sh \
   assets/images/android-ws/recipe.json \
   assets/images/android-ws/Dockerfile.android-ws-v1 \
+  assets/images/android-ws/Dockerfile.android-ws-v2 \
   assets/systemd/docker-ws-workbench.service docker_ws/cli/main.py \
   docker_ws/core/workstation.py docker_ws/core/images.py docker_ws/core/recipes.py \
   docker_ws/core/image_builder.py docker_ws/core/image_verifier.py \
@@ -20,12 +21,14 @@ for obsolete in Dockerfile cli core web workbench systemd; do
 done
 
 test ! -e assets/docker || { echo 'obsolete asset path remains: assets/docker' >&2; exit 1; }
-grep -F 'FROM ${CUDA_IMAGE} AS core' assets/images/android-ws/Dockerfile.android-ws-v1 >/dev/null
-grep -F 'FROM core AS desktop' assets/images/android-ws/Dockerfile.android-ws-v1 >/dev/null
-! grep -F 'verify-image' assets/images/android-ws/Dockerfile.android-ws-v1 >/dev/null
-! grep -F 'start-vnc' assets/images/android-ws/Dockerfile.android-ws-v1 >/dev/null
-grep -F 'WORKDIR /workspace' assets/images/android-ws/Dockerfile.android-ws-v1 >/dev/null
-grep -F 'Dockerfile.android-ws-v1' docker_ws/core/workstation.py >/dev/null
+grep -F 'ARG CUDA_IMAGE=nvcr.io/nvidia/cuda:12.8.1-devel-ubuntu22.04' assets/images/android-ws/Dockerfile.android-ws-v2 >/dev/null
+! grep -F 'docker.io/' assets/images/android-ws/Dockerfile.android-ws-v2 >/dev/null
+grep -F 'FROM ${CUDA_IMAGE} AS core' assets/images/android-ws/Dockerfile.android-ws-v2 >/dev/null
+grep -F 'FROM core AS desktop' assets/images/android-ws/Dockerfile.android-ws-v2 >/dev/null
+! grep -F 'verify-image' assets/images/android-ws/Dockerfile.android-ws-v2 >/dev/null
+! grep -F 'start-vnc' assets/images/android-ws/Dockerfile.android-ws-v2 >/dev/null
+grep -F 'WORKDIR /workspace' assets/images/android-ws/Dockerfile.android-ws-v2 >/dev/null
+grep -F 'Dockerfile.android-ws-v2' docker_ws/core/workstation.py >/dev/null
 grep -F 'dst=/workspace' docker_ws/core/workstation.py >/dev/null
 grep -F 'ROBOTICS_WS_WORKSPACE' docker_ws/core/workstation.py >/dev/null
 grep -F -- '--workspace' docker_ws/cli/main.py >/dev/null

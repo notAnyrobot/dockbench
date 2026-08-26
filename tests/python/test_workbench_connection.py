@@ -42,7 +42,7 @@ def ready_connection(monkeypatch, process=None, *, available=True, health=True):
     return process, commands
 
 
-def test_connect_uses_loopback_ssh_argv_and_opens_browser(monkeypatch):
+def test_connect_uses_loopback_ssh_argv_without_opening_browser(monkeypatch):
     process, commands = ready_connection(monkeypatch)
     browser_urls = []
     monkeypatch.setattr(connection.webbrowser, "open", lambda url: browser_urls.append(url) or True)
@@ -51,8 +51,8 @@ def test_connect_uses_loopback_ssh_argv_and_opens_browser(monkeypatch):
     result = connection.connect("hpc-login", remote_port=8899)
 
     assert result.url == "http://127.0.0.1:8787"
-    assert result.browser_opened and result.interrupted
-    assert browser_urls == [result.url]
+    assert not result.browser_opened and result.interrupted
+    assert browser_urls == []
     assert commands == [[
         "/usr/bin/ssh", "-N", "-o", "ExitOnForwardFailure=yes", "-o", "ServerAliveInterval=30", "-o", "ServerAliveCountMax=3",
         "-L", "127.0.0.1:8787:127.0.0.1:8899", "hpc-login",
@@ -60,13 +60,13 @@ def test_connect_uses_loopback_ssh_argv_and_opens_browser(monkeypatch):
     assert process.terminated and process.wait_calls == [5]
 
 
-def test_connect_announces_ready_url_before_opening_browser(monkeypatch):
+def test_connect_can_open_browser_after_announcing_ready_url(monkeypatch):
     process, _ = ready_connection(monkeypatch)
     events = []
     monkeypatch.setattr(connection.webbrowser, "open", lambda url: events.append(("browser", url)) or True)
     monkeypatch.setattr(connection.time, "sleep", lambda _: (_ for _ in ()).throw(KeyboardInterrupt()))
 
-    result = connection.connect("hpc", on_ready=lambda url: events.append(("ready", url)))
+    result = connection.connect("hpc", open_browser=True, on_ready=lambda url: events.append(("ready", url)))
 
     assert events == [("ready", result.url), ("browser", result.url)]
 

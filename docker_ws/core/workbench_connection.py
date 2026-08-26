@@ -132,10 +132,10 @@ def connect(
     *,
     local_port: int | None = None,
     remote_port: int = DEFAULT_WORKBENCH_PORT,
-    open_browser: bool = True,
+    open_browser: bool = False,
     on_ready: Callable[[str], None] | None = None,
 ) -> WorkbenchConnectionResult:
-    """Open a foreground SSH tunnel and browser to a remote Workbench.
+    """Open a foreground SSH tunnel to a remote Workbench.
 
     ``local_port=None`` deliberately means "prefer 8787, otherwise choose a
     free port".  Passing an integer is an explicit choice and fails when that

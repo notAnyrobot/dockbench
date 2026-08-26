@@ -1,9 +1,9 @@
 {
   "schema_version": 1,
   "id": "android-ws",
-  "revision": 1,
-  "dockerfile": "Dockerfile.android-ws-v1",
-  "tag": "android-ws:u22.04-cu12.8-v1",
+  "revision": 2,
+  "dockerfile": "Dockerfile.android-ws-v2",
+  "tag": "android-ws:u22.04-cu12.8-v2",
   "target": "desktop",
   "platform": "linux/amd64"
 }

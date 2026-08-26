@@ -5,6 +5,10 @@ class WorkstationError(RuntimeError):
     """An expected, safe-to-display workstation failure."""
 
 
+class DockerCommandError(WorkstationError):
+    """A Docker CLI failure whose daemon detail must be sanitized for the UI."""
+
+
 class WorkstationRebuildRequired(WorkstationError):
     """Compatibility name for callers handling a changed launch request."""
 

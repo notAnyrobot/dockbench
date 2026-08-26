@@ -119,6 +119,27 @@ def test_newly_created_named_container_is_discovered_by_docker_label(tmp_path):
     assert listing[listing.index("--filter") + 1] == "label=docker-ws.managed=true"
 
 
+def test_fleet_removes_managed_created_container_after_failed_startup(tmp_path):
+    class CreatedOnFailureDocker(Docker):
+        def run(self, args, **kwargs):
+            if args[:2] == ["run", "-d"]:
+                name = args[args.index("--name") + 1]
+                spec = next(value.split("=", 1)[1] for value in args if value.startswith("docker-ws.launch-spec="))
+                self.commands.append(args)
+                self.containers[name] = {"state": "created", "spec": spec, "managed": "docker-ws.managed=true" in args}
+                raise WorkstationError("failed to start")
+            return super().run(args, **kwargs)
+
+    docker = CreatedOnFailureDocker()
+    fleet = FleetManager(config(tmp_path), docker, Inventory())
+
+    with pytest.raises(WorkstationError, match="failed to start"):
+        fleet.create("one", "demo:image")
+
+    assert "one" not in docker.containers
+    assert ["rm", "one"] in docker.commands
+
+
 def test_remove_preserves_named_state_and_state_delete_requires_absence(tmp_path):
     docker = Docker(); fleet = FleetManager(config(tmp_path), docker, Inventory())
     fleet.create("one", "demo:image")
