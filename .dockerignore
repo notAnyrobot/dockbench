@@ -1,7 +1,6 @@
 *
 !assets/
-!assets/docker/
-!assets/docker/Dockerfile
-!assets/docker/bin/
-!assets/docker/bin/start-vnc
-!assets/docker/bin/verify-image
+!assets/images/
+!assets/images/android-ws/
+!assets/images/android-ws/Dockerfile.android-ws-v1
+!assets/images/android-ws/recipe.json

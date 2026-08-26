@@ -11,6 +11,7 @@ from docker_ws.core.workstation import (
 )
 from docker_ws.core.errors import WorkstationGPUConflict
 from docker_ws.web.app import DesktopSessions, _redact_image_log, create_app
+from docker_ws.core.recipes import RecipeError
 
 
 class FakeWorkstation:
@@ -43,6 +44,37 @@ class FakeFleet:
     def orphaned_states(self): return ("removed-alpha",)
     def inventory(self):
         return {"images": [{"id": "sha256:one", "display_reference": "desktop:latest", "desktop_capable": True}], "gpus": [{"uuid": "GPU-a", "index": 0, "name": "GPU", "memory_total_mib": 100, "reservation": "alpha", "available": False}], "gpu_diagnostic": None, "default_image": "desktop:latest", "containers": []}
+
+
+class FakeManifest:
+    def __init__(self, recipe_id="android-ws", revision=1, tag="android-ws:test", target="desktop", platform="linux/amd64"):
+        self.id, self.revision, self.dockerfile = recipe_id, revision, f"Dockerfile.{recipe_id}-v{revision}"
+        self.tag, self.target, self.platform = tag, target, platform
+
+
+class FakeRecipe:
+    def __init__(self, *args, **kwargs): self.manifest = FakeManifest(*args, **kwargs)
+
+
+class FakeRecipes:
+    def __init__(self): self.items = {"android-ws": FakeRecipe()}; self.created = None; self.revised = None
+    def list(self): return tuple(self.items.values())
+    def get(self, recipe_id): return self.items[recipe_id]
+    def create(self, recipe_id, dockerfile, **kwargs):
+        if recipe_id in self.items: raise RecipeError(f"recipe already exists: {recipe_id}")
+        self.created = (recipe_id, dockerfile, kwargs); item = FakeRecipe(recipe_id, **kwargs); self.items[recipe_id] = item; return item
+    def revise(self, recipe_id, dockerfile, **kwargs):
+        self.revised = (recipe_id, dockerfile, kwargs); old = self.items[recipe_id].manifest; item = FakeRecipe(recipe_id, old.revision + 1, kwargs.get("tag", old.tag), kwargs.get("target", old.target), kwargs.get("platform", old.platform)); self.items[recipe_id] = item; return item
+
+
+class FakeImageBuilder:
+    def __init__(self): self.calls = []
+    def build(self, recipe, **kwargs): self.calls.append((recipe, kwargs)); return "build completed"
+
+
+class FakeImageVerifier:
+    def __init__(self): self.calls = []
+    def verify(self, image): self.calls.append(image); return "verified"
 
 
 def test_status_issues_csrf_and_mutations_require_it():
@@ -204,3 +236,42 @@ def test_image_job_log_redaction_removes_secret_values():
     assert "private" not in log
     assert "token=[REDACTED]" in log
     assert "password:[REDACTED]" in log
+
+
+def test_recipe_api_requires_csrf_and_creates_revisions_without_starting_builds():
+    recipes = FakeRecipes()
+    builder = FakeImageBuilder()
+    client = TestClient(create_app(FakeWorkstation(), fleet=FakeFleet(), recipes=recipes, image_builder=builder, image_verifier=FakeImageVerifier()))
+    listed = client.get("/api/image-recipes")
+    assert listed.status_code == 200
+    assert listed.json()["recipes"] == [{"id": "android-ws", "revision": 1, "dockerfile": "Dockerfile.android-ws-v1", "tag": "android-ws:test", "target": "desktop", "platform": "linux/amd64"}]
+    payload = {"id": "custom-ws", "dockerfile": "FROM ubuntu:24.04\n", "tag": "custom:one", "target": None, "platform": "linux/amd64"}
+    assert client.post("/api/image-recipes", json=payload).status_code == 403
+    headers = {"origin": "http://testserver", "x-csrf-token": listed.json()["csrf_token"]}
+    created = client.post("/api/image-recipes", json=payload, headers=headers)
+    assert created.status_code == 200
+    assert recipes.created == ("custom-ws", "FROM ubuntu:24.04\n", {"tag": "custom:one", "target": None, "platform": "linux/amd64"})
+    assert builder.calls == []
+    revised = client.post("/api/image-recipes/custom-ws/revisions", json={"dockerfile": "FROM ubuntu:24.04\nRUN true\n", "target": "desktop"}, headers=headers)
+    assert revised.status_code == 200
+    assert recipes.revised == ("custom-ws", "FROM ubuntu:24.04\nRUN true\n", {"target": "desktop"})
+
+
+def test_build_and_verify_are_csrf_protected_serialized_image_jobs():
+    recipes, builder, verifier = FakeRecipes(), FakeImageBuilder(), FakeImageVerifier()
+    app = create_app(FakeWorkstation(), fleet=FakeFleet(), recipes=recipes,
+                     image_builder=builder, image_verifier=verifier)
+    with TestClient(app) as client:
+        token = client.get("/api/image-recipes").json()["csrf_token"]
+        headers = {"origin": "http://testserver", "x-csrf-token": token}
+        assert client.post("/api/images/build", json={}).status_code == 403
+        build = client.post("/api/images/build", json={"recipe_id": "android-ws", "tag": "custom:two", "target": None, "no_cache": True}, headers=headers)
+        assert build.status_code == 200
+        build_job = client.get(f"/api/image-jobs/{build.json()['id']}")
+        assert build_job.json()["state"] == "completed"
+        assert builder.calls and builder.calls[0][1] == {"tag": "custom:two", "target": None, "no_cache": True}
+        verify = client.post("/api/images/sha256:one/verify", headers=headers)
+        assert verify.status_code == 200
+        verify_job = client.get(f"/api/image-jobs/{verify.json()['id']}")
+        assert verify_job.json()["state"] == "completed"
+        assert verifier.calls == ["sha256:one"]

@@ -11,9 +11,12 @@ from typing import Sequence
 
 import uvicorn
 
-from docker_ws.core.workstation import Workstation, WorkstationError
+from docker_ws.core.workstation import SubprocessDockerRunner, Workstation, WorkstationError
 from docker_ws.core.host_inventory import HostInventory
+from docker_ws.core.image_builder import ImageBuilder
+from docker_ws.core.image_verifier import ImageVerifier
 from docker_ws.core.images import WorkstationImages
+from docker_ws.core.recipes import DEFAULT_PLATFORM, RecipeCatalog
 
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
@@ -76,6 +79,64 @@ def _package_images(action: str, paths: list[str]) -> int:
         return _fail(str(exc))
 
 
+def _recipe_catalog() -> RecipeCatalog:
+    return RecipeCatalog.for_repository(REPOSITORY_ROOT)
+
+
+def _docker_runner() -> SubprocessDockerRunner:
+    return SubprocessDockerRunner(os.environ.get("ROBOTICS_WS_DOCKER", "docker"))
+
+
+def _recipe_action(action: str, recipe_id: str | None = None, dockerfile: str | None = None,
+                   **defaults: object) -> int:
+    try:
+        catalog = _recipe_catalog()
+        if action == "list":
+            for recipe in catalog.list():
+                manifest = recipe.manifest
+                target = manifest.target or "default target"
+                print(f"{manifest.id}\tv{manifest.revision}\t{manifest.tag}\t{target}\t{manifest.platform}")
+            return 0
+        if recipe_id is None or dockerfile is None:
+            raise WorkstationError(f"recipe {action} requires an id and Dockerfile")
+        content = Path(dockerfile).read_bytes()
+        recipe = (catalog.create(recipe_id, content, **defaults)
+                  if action == "add" else catalog.revise(recipe_id, content, **defaults))
+        print(f"{recipe.id}: recipe revision {recipe.manifest.revision} saved")
+        return 0
+    except (OSError, WorkstationError) as exc:
+        return _fail(str(exc))
+
+
+def _build_recipe(recipe_id: str, *, tag: str | None = None, target: str | None = None,
+                  platform: str | None = None, no_cache: bool = False) -> int:
+    try:
+        catalog = _recipe_catalog()
+        recipe = catalog.get(recipe_id)
+        overrides: dict[str, object] = {"no_cache": no_cache}
+        if tag is not None:
+            overrides["tag"] = tag
+        if target is not None:
+            overrides["target"] = target
+        if platform is not None:
+            overrides["platform"] = platform
+        result = ImageBuilder(_docker_runner()).build(recipe, **overrides)
+        print(f"{result.tag}: image built from {recipe.id} revision {recipe.manifest.revision}")
+        return 0
+    except WorkstationError as exc:
+        return _fail(str(exc))
+
+
+def _verify_image(image: str) -> int:
+    try:
+        result = ImageVerifier(_docker_runner()).verify(image)
+        capabilities = ", ".join(result.checks)
+        print(f"{result.image}: verified ({capabilities})")
+        return 0
+    except WorkstationError as exc:
+        return _fail(str(exc))
+
+
 def _install_service() -> int:
     try:
         uv = shutil.which("uv")
@@ -128,8 +189,30 @@ def parser() -> argparse.ArgumentParser:
     image_actions.add_parser("help", help="Show image command help.").set_defaults(help_parser=image)
     image_list = image_actions.add_parser("list", help="List tagged local images.")
     image_list.add_argument("--json", action="store_true", help="Emit machine-readable JSON.")
-    image_actions.add_parser("build", help="Build or update the desktop image using Docker's layer cache.")
+    build = image_actions.add_parser("build", help="Build a managed image recipe using Docker's layer cache.")
+    build.add_argument("recipe", nargs="?", default="android-ws", help="Recipe id (default: android-ws).")
+    build.add_argument("--tag", help="Override the recipe's output image tag for this build.")
+    build.add_argument("--target", help="Override the recipe's Dockerfile target for this build.")
+    build.add_argument("--platform", help="Override the recipe's target platform for this build.")
+    build.add_argument("--no-cache", action="store_true", help="Build without using cached layers.")
     image_actions.add_parser("rebuild", help="Build the image, replace the container, and start it again.")
+    verify = image_actions.add_parser("verify", help="Verify an image's advertised workstation capabilities.")
+    verify.add_argument("image", help="Local image reference or id to verify.")
+    recipe = image_actions.add_parser("recipe", help="List, add, or revise managed image recipes.")
+    recipe_actions = recipe.add_subparsers(dest="recipe_action", required=True, metavar="ACTION")
+    recipe_actions.add_parser("list", help="List managed image recipes.")
+    add_recipe = recipe_actions.add_parser("add", help="Add a Dockerfile as a new managed recipe.")
+    add_recipe.add_argument("id", help="Lowercase kebab-case recipe id.")
+    add_recipe.add_argument("dockerfile", help="UTF-8 Dockerfile to import.")
+    add_recipe.add_argument("--tag", required=True, help="Default output image tag.")
+    add_recipe.add_argument("--target", default=None, help="Default Dockerfile target.")
+    add_recipe.add_argument("--platform", default=DEFAULT_PLATFORM, help="Default target platform.")
+    revise_recipe = recipe_actions.add_parser("revise", help="Add the next Dockerfile revision to a recipe.")
+    revise_recipe.add_argument("id", help="Existing recipe id.")
+    revise_recipe.add_argument("dockerfile", help="UTF-8 Dockerfile to import.")
+    revise_recipe.add_argument("--tag", default=argparse.SUPPRESS, help="Replace the default output image tag.")
+    revise_recipe.add_argument("--target", default=argparse.SUPPRESS, help="Replace the default Dockerfile target.")
+    revise_recipe.add_argument("--platform", default=argparse.SUPPRESS, help="Replace the default target platform.")
     package = image_actions.add_parser("package", help="Save the desktop image as a Docker tar file.")
     package.add_argument("directory", nargs="*")
     load = image_actions.add_parser("load", help="Load one or more Docker image tar files.")
@@ -164,8 +247,19 @@ def main(argv: Sequence[str] | None = None) -> int:
             return 0
         if arguments.image_action == "list":
             return _host_inventory("images", arguments.json)
-        if arguments.image_action in {"build", "rebuild"}:
-            return _workstation(arguments.image_action)
+        if arguments.image_action == "build":
+            return _build_recipe(arguments.recipe, tag=arguments.tag, target=arguments.target,
+                                 platform=arguments.platform, no_cache=arguments.no_cache)
+        if arguments.image_action == "rebuild":
+            return _workstation("rebuild")
+        if arguments.image_action == "verify":
+            return _verify_image(arguments.image)
+        if arguments.image_action == "recipe":
+            if arguments.recipe_action == "list":
+                return _recipe_action("list")
+            defaults = {name: getattr(arguments, name) for name in ("tag", "target", "platform")
+                        if hasattr(arguments, name)}
+            return _recipe_action(arguments.recipe_action, arguments.id, arguments.dockerfile, **defaults)
         if arguments.image_action == "package":
             if len(arguments.directory) > 1:
                 return _fail("package accepts at most one output directory")

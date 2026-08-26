@@ -59,6 +59,7 @@ def test_creation_defaults_to_desktop_image_and_all_gpus(tmp_path):
     command = next(command for command in fake.commands if command[:2] == ["run", "-d"])
     assert result.state == "running" and result.image_ref == DEFAULT_IMAGE and result.gpu_uuids == ("GPU-abc",)
     assert ["--gpus", "device=GPU-abc"] == command[command.index("--gpus"):command.index("--gpus") + 2]
+    assert ["--user", "root"] == command[command.index("--user"):command.index("--user") + 2]
     assert command[-3:] == ["sha256:image", "-lc", "exec sleep infinity"]
     assert "--entrypoint" in command and any("dst=/workspace" in item for item in command)
 
@@ -109,6 +110,11 @@ def test_desktop_contract_exposes_desktop_endpoint(tmp_path):
     endpoint = ws.ensure_desktop("password")
     assert (endpoint.host, endpoint.port) == ("127.0.0.1", 5901)
     assert any(command[:2] == ["exec", "-d"] for command in fake.commands)
+    start = next(command for command in fake.commands if command[:2] == ["exec", "-d"])
+    assert "start-vnc" not in start
+    assert start[-1] == 'exec vncserver "${VNC_DISPLAY:-:1}" -fg -localhost no -geometry "${VNC_GEOMETRY:-1920x1080}" -depth "${VNC_DEPTH:-24}"'
+    startup = next(payload for payload in fake.inputs if payload and "dbus-launch" in payload)
+    assert "exec dbus-launch --exit-with-session startxfce4" in startup
 
 
 def test_desktop_contract_restores_host_user_and_secure_vnc_paths(tmp_path):

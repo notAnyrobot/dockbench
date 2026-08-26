@@ -158,7 +158,7 @@ class Workstation:
         c = self.config; c.state_root.mkdir(parents=True, exist_ok=True)
         # Never force a platform for an arbitrary local image: Docker has
         # already resolved the image's locally available architecture.
-        args = ["run", "-d", "--name", c.container_name, "--hostname", c.container_name, "--shm-size", c.shm_size, "--restart", "unless-stopped", "--label", "docker-ws.managed=true", "--label", f"docker-ws.state-root={c.state_root}", "--label", f"docker-ws.launch-spec={spec.label_value()}", "--label", f"docker-ws.image-id={spec.image_id}", "--label", f"docker-ws.image-ref={spec.image_ref}", "--label", f"docker-ws.gpus={','.join(spec.gpu_uuids)}", "--label", f"robotics-ws.launch-config={c.launch_config}", "--mount", f"type=bind,src={c.code_root},dst=/workspace", "--mount", f"type=bind,src={c.state_root},dst=/state"]
+        args = ["run", "-d", "--name", c.container_name, "--hostname", c.container_name, "--user", "root", "--shm-size", c.shm_size, "--restart", "unless-stopped", "--label", "docker-ws.managed=true", "--label", f"docker-ws.state-root={c.state_root}", "--label", f"docker-ws.launch-spec={spec.label_value()}", "--label", f"docker-ws.image-id={spec.image_id}", "--label", f"docker-ws.image-ref={spec.image_ref}", "--label", f"docker-ws.gpus={','.join(spec.gpu_uuids)}", "--label", f"robotics-ws.launch-config={c.launch_config}", "--mount", f"type=bind,src={c.code_root},dst=/workspace", "--mount", f"type=bind,src={c.state_root},dst=/state"]
         if spec.gpu_uuids: args += ["--gpus", f"device={','.join(spec.gpu_uuids)}"]
         if spec.desktop_capable:
             # Fleet containers use Docker's ephemeral host ports.  This makes
@@ -214,7 +214,10 @@ chown "$requested_uid:$requested_gid" /state/.robotics-ws-bashrc
             if spec.desktop_capable: self._prepare_user()
             return self.status()
     def build(self) -> None:
-        image = self.config.image or DEFAULT_IMAGE; self.docker.run(["buildx", "build", "--platform", "linux/amd64", "--file", str(self.config.repository_root / "assets/docker/Dockerfile"), "--target", "desktop", "--load", "--tag", image, str(self.config.repository_root)]); print(f"{image}: image built")
+        image = self.config.image or DEFAULT_IMAGE
+        recipe_dir = self.config.repository_root / "assets" / "images" / "android-ws"
+        self.docker.run(["buildx", "build", "--platform", "linux/amd64", "--file", str(recipe_dir / "Dockerfile.android-ws-v1"), "--target", "desktop", "--load", "--tag", image, str(recipe_dir)])
+        print(f"{image}: image built")
     def rebuild(self) -> WorkstationStatus:
         self.build(); return self.start(image=self.config.image or DEFAULT_IMAGE, replace=True)
     def enter(self) -> None:
@@ -252,8 +255,36 @@ chown "$requested_uid:$requested_gid" /state/.robotics-ws-bashrc
         c = self.config
         try: self.docker.run(["exec", "--user", f"{c.container_uid}:{c.container_gid}", c.container_name, "/bin/bash", "-c", 'vncserver -list | grep -Fv stale | grep -Eq "^[[:space:]]*1[[:space:]]+5901"']); return True
         except WorkstationError: return False
+    def _write_vnc_xstartup(self) -> None:
+        """Install the desktop session launcher without depending on image helpers."""
+        c = self.config
+        script = '''set -eu
+vnc_dir="$HOME/.vnc"
+xstartup="$vnc_dir/xstartup"
+mkdir -p "$vnc_dir"
+chmod 700 "$vnc_dir"
+if test ! -f "$xstartup"; then
+  cat >"$xstartup" <<'XSTARTUP'
+#!/bin/sh
+unset SESSION_MANAGER
+unset DBUS_SESSION_BUS_ADDRESS
+exec dbus-launch --exit-with-session startxfce4
+XSTARTUP
+  chmod 700 "$xstartup"
+fi
+'''
+        self.docker.run(["exec", "-i", "--user", f"{c.container_uid}:{c.container_gid}", "--env", "HOME=/state/home", c.container_name, "/bin/sh", "-s"], input=script)
+
     def _start_vnc(self) -> None:
-        if not self._vnc_running(): self.docker.run(["exec", "-d", "--user", f"{self.config.container_uid}:{self.config.container_gid}", self.config.container_name, "start-vnc"])
+        if self._vnc_running():
+            return
+        self._write_vnc_xstartup()
+        c = self.config
+        self.docker.run([
+            "exec", "-d", "--user", f"{c.container_uid}:{c.container_gid}", "--env", "HOME=/state/home",
+            c.container_name, "/bin/sh", "-c",
+            'exec vncserver "${VNC_DISPLAY:-:1}" -fg -localhost no -geometry "${VNC_GEOMETRY:-1920x1080}" -depth "${VNC_DEPTH:-24}"',
+        ])
     def _wait_for_vnc(self) -> None:
         c = self.config; probe = 'test "$(tigervncconfig -display :1 -get AcceptPointerEvents 2>/dev/null)" = 1 && test "$(tigervncconfig -display :1 -get AcceptKeyEvents 2>/dev/null)" = 1'
         for _ in range(100):

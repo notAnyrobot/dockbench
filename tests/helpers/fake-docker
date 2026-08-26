@@ -27,6 +27,8 @@ case "${1:-} ${2:-}" in
   "image inspect")
     if [[ "$*" == *'{{json .}}'* ]]; then
       printf '%s\n' '{"Id":"sha256:test-image","RepoTags":["docker-ws:test-desktop"],"Size":1,"Created":"2026-01-01T00:00:00Z","Architecture":"amd64","Config":{"Labels":{"io.docker-workstation.desktop-contract":"v1"}}}'
+    elif [[ "$*" == *'desktop-contract'* ]]; then
+      printf '%s\n' 'v1'
     else
       printf '%s\n' "${FAKE_IMAGE_ID:-sha256:test-image}"
     fi

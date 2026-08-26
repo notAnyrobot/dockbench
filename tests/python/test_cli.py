@@ -66,6 +66,34 @@ def test_help_image_list_and_container_commands_are_grouped(monkeypatch, capsys)
         command.parse_args(["images"])
 
 
+def test_image_build_recipe_and_verification_options_dispatch(monkeypatch):
+    calls = []
+    monkeypatch.setattr(main, "_build_recipe", lambda *args, **kwargs: calls.append(("build", args, kwargs)) or 0)
+    monkeypatch.setattr(main, "_verify_image", lambda *args: calls.append(("verify", args)) or 0)
+
+    assert main.main(["image", "build", "custom", "--tag", "custom:v2", "--target", "desktop",
+                      "--platform", "linux/arm64", "--no-cache"]) == 0
+    assert main.main(["image", "verify", "custom:v2"]) == 0
+    assert calls == [
+        ("build", ("custom",), {"tag": "custom:v2", "target": "desktop",
+                                  "platform": "linux/arm64", "no_cache": True}),
+        ("verify", ("custom:v2",)),
+    ]
+
+
+def test_recipe_add_and_revise_dispatch_only_explicit_defaults(monkeypatch):
+    calls = []
+    monkeypatch.setattr(main, "_recipe_action", lambda *args, **kwargs: calls.append((args, kwargs)) or 0)
+
+    assert main.main(["image", "recipe", "add", "demo", "Dockerfile", "--tag", "demo:v1"]) == 0
+    assert main.main(["image", "recipe", "revise", "demo", "Dockerfile", "--target", "desktop"]) == 0
+    assert calls == [
+        (("add", "demo", "Dockerfile"), {"tag": "demo:v1", "target": None,
+                                           "platform": "linux/amd64"}),
+        (("revise", "demo", "Dockerfile"), {"target": "desktop"}),
+    ]
+
+
 @pytest.mark.parametrize(
     ("group", "expected"),
     [("container", "start"), ("image", "list"), ("service", "install")],

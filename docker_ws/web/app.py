@@ -34,6 +34,7 @@ from docker_ws.core.workstation import (
     WorkstationReplaceRequired,
 )
 from docker_ws.core.host_inventory import HostInventory
+from docker_ws.core.recipes import RecipeError
 
 LOG = logging.getLogger(__name__)
 ROOT = Path(__file__).resolve().parents[2]
@@ -97,7 +98,27 @@ class ContainerCreateRequest(BaseModel):
 
 
 class ImageBuildRequest(BaseModel):
+    recipe_id: str = Field(default="android-ws", min_length=1, max_length=96,
+                           pattern=r"[a-z0-9]+(?:-[a-z0-9]+)*")
+    tag: str | None = Field(default=None, min_length=1, max_length=512)
+    target: str | None = Field(default=None, min_length=1, max_length=128)
+    platform: str | None = Field(default=None, min_length=1, max_length=128)
     no_cache: bool = False
+
+
+class RecipeCreateRequest(BaseModel):
+    id: str = Field(min_length=1, max_length=96, pattern=r"[a-z0-9]+(?:-[a-z0-9]+)*")
+    dockerfile: str = Field(min_length=1, max_length=1_048_576)
+    tag: str = Field(min_length=1, max_length=512)
+    target: str | None = Field(default=None, max_length=128)
+    platform: str = Field(default="linux/amd64", min_length=1, max_length=128)
+
+
+class RecipeReviseRequest(BaseModel):
+    dockerfile: str = Field(min_length=1, max_length=1_048_576)
+    tag: str | None = Field(default=None, max_length=512)
+    target: str | None = Field(default=None, max_length=128)
+    platform: str | None = Field(default=None, max_length=128)
 
 
 class DesktopSessions:
@@ -157,6 +178,9 @@ class TerminalSessions:
 def safe_error(exc: Exception) -> JSONResponse:
     correlation_id = uuid.uuid4().hex
     LOG.warning("workbench request failed id=%s kind=%s", correlation_id, type(exc).__name__)
+    if isinstance(exc, RecipeError):
+        status = 409 if "already exists" in str(exc) else 422
+        return JSONResponse(status_code=status, content={"code": "invalid_recipe", "message": str(exc), "correlation_id": correlation_id})
     if isinstance(exc, WorkstationReplaceRequired):
         return JSONResponse(status_code=409, content={"code": "workstation_replace_required", "message": "The requested image or GPU selection differs. Replacing keeps /workspace and /state but discards the old container filesystem.", "correlation_id": correlation_id})
     if isinstance(exc, WorkstationRebuildRequired):
@@ -205,7 +229,9 @@ def _issue_csrf(response: Response, current: str | None) -> str:
     return token
 
 
-def create_app(workstation: Workstation | None = None, fleet: Any | None = None) -> FastAPI:
+def create_app(workstation: Workstation | None = None, fleet: Any | None = None,
+               recipes: Any | None = None, image_builder: Any | None = None,
+               image_verifier: Any | None = None) -> FastAPI:
     app = FastAPI(title="Docker Workstation Workbench", docs_url=None, redoc_url=None, openapi_url=None)
     app.state.workstation = workstation
     app.state.fleet = fleet
@@ -215,6 +241,9 @@ def create_app(workstation: Workstation | None = None, fleet: Any | None = None)
     app.state.desktop_socket_containers: dict[WebSocket, str] = {}
     app.state.image_jobs: dict[str, ImageJob] = {}
     app.state.image_job_lock = asyncio.Lock()
+    app.state.recipes = recipes
+    app.state.image_builder = image_builder
+    app.state.image_verifier = image_verifier
 
     @app.middleware("http")
     async def security_headers(request: Request, call_next):
@@ -257,6 +286,36 @@ def create_app(workstation: Workstation | None = None, fleet: Any | None = None)
 
     async def _fleet_call(method: str, *args: Any, **kwargs: Any) -> Any:
         return await run_in_threadpool(getattr(managed_fleet(), method), *args, **kwargs)
+
+    def recipe_catalog() -> Any:
+        """The web layer only adapts the core recipe service; it owns no files."""
+        if app.state.recipes is None:
+            from docker_ws.core.recipes import RecipeCatalog
+            app.state.recipes = RecipeCatalog(managed_fleet().config.repository_root / "assets" / "images")
+        return app.state.recipes
+
+    def recipe_builder() -> Any:
+        if app.state.image_builder is None:
+            from docker_ws.core.image_builder import ImageBuilder
+            app.state.image_builder = ImageBuilder(managed_fleet().docker)
+        return app.state.image_builder
+
+    def image_verifier() -> Any:
+        if app.state.image_verifier is None:
+            from docker_ws.core.image_verifier import ImageVerifier
+            app.state.image_verifier = ImageVerifier(managed_fleet().docker)
+        return app.state.image_verifier
+
+    def recipe_public(recipe: Any) -> dict[str, Any]:
+        manifest = getattr(recipe, "manifest", recipe)
+        return {
+            "id": getattr(manifest, "id"),
+            "revision": getattr(manifest, "revision"),
+            "dockerfile": getattr(recipe, "dockerfile", getattr(manifest, "dockerfile", None)),
+            "tag": getattr(manifest, "tag"),
+            "target": getattr(manifest, "target", None),
+            "platform": getattr(manifest, "platform", None),
+        }
 
     async def _close_desktop_sockets(container_name: str | None = None) -> None:
         # Sessions are container-scoped.  A stopped/replaced container only
@@ -402,6 +461,42 @@ def create_app(workstation: Workstation | None = None, fleet: Any | None = None)
         except Exception as exc:
             return safe_error(exc)
 
+    @app.get("/api/image-recipes")
+    async def image_recipes(response: Response, workbench_csrf: str | None = Cookie(default=None)):
+        token = _issue_csrf(response, workbench_csrf)
+        try:
+            items = await run_in_threadpool(recipe_catalog().list)
+            return {"recipes": [recipe_public(item) for item in items], "csrf_token": token}
+        except Exception as exc:
+            return safe_error(exc)
+
+    @app.post("/api/image-recipes")
+    async def create_image_recipe(body: RecipeCreateRequest, request: Request,
+                                  workbench_csrf: str | None = Cookie(default=None)):
+        _require_csrf(request, workbench_csrf)
+        try:
+            recipe = await run_in_threadpool(
+                recipe_catalog().create, body.id, body.dockerfile,
+                tag=body.tag, target=body.target, platform=body.platform,
+            )
+            return recipe_public(recipe)
+        except Exception as exc:
+            return safe_error(exc)
+
+    @app.post("/api/image-recipes/{recipe_id}/revisions")
+    async def revise_image_recipe(recipe_id: str, body: RecipeReviseRequest, request: Request,
+                                  workbench_csrf: str | None = Cookie(default=None)):
+        _require_csrf(request, workbench_csrf)
+        try:
+            # Only pass requested defaults: omitted fields retain their prior
+            # manifest values while an explicit null target clears the target.
+            defaults = {field: getattr(body, field) for field in ("tag", "target", "platform")
+                        if field in body.model_fields_set}
+            recipe = await run_in_threadpool(recipe_catalog().revise, recipe_id, body.dockerfile, **defaults)
+            return recipe_public(recipe)
+        except Exception as exc:
+            return safe_error(exc)
+
     def start_image_job(kind: str, operation: Any) -> ImageJob:
         queued = app.state.image_job_lock.locked()
         job = ImageJob(uuid.uuid4().hex, kind, state="queued" if queued else "running",
@@ -435,17 +530,24 @@ def create_app(workstation: Workstation | None = None, fleet: Any | None = None)
     async def build_image(body: ImageBuildRequest, request: Request, workbench_csrf: str | None = Cookie(default=None)):
         _require_csrf(request, workbench_csrf)
         try:
-            manager = managed_fleet()
-            config = manager.config
-            image = config.image or DEFAULT_IMAGE
+            recipe = await run_in_threadpool(recipe_catalog().get, body.recipe_id)
 
-            def build() -> None:
-                args = ["buildx", "build", "--platform", "linux/amd64", "--file", str(config.repository_root / "assets/docker/Dockerfile"), "--target", "desktop", "--load", "--tag", image]
-                if body.no_cache:
-                    args.append("--no-cache")
-                return manager.docker.run(args + [str(config.repository_root)], capture=True)
+            overrides = {field: getattr(body, field) for field in ("tag", "target", "platform")
+                         if field in body.model_fields_set}
 
-            job = start_image_job("build", build)
+            def build() -> Any:
+                return recipe_builder().build(recipe, no_cache=body.no_cache, **overrides)
+
+            job = start_image_job("no-cache build" if body.no_cache else "build", build)
+            return {"id": job.id, "kind": job.kind, "state": job.state}
+        except Exception as exc:
+            return safe_error(exc)
+
+    @app.post("/api/images/{image_id}/verify")
+    async def verify_image(image_id: str, request: Request, workbench_csrf: str | None = Cookie(default=None)):
+        _require_csrf(request, workbench_csrf)
+        try:
+            job = start_image_job("verify", lambda: image_verifier().verify(image_id))
             return {"id": job.id, "kind": job.kind, "state": job.state}
         except Exception as exc:
             return safe_error(exc)

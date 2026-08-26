@@ -1,4 +1,5 @@
 .DS_Store
+.vscode/
 .robotics-ws/
 .venv/
 .pytest_cache/

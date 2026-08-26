@@ -12,7 +12,7 @@ from docker_ws.core.defaults import DEFAULT_IMAGE
 from docker_ws.core.workstation import WorkstationError
 
 
-ARCHIVE_NAME = "docker-ws-u22.04-cu12.8.1-v1-desktop.tar"
+ARCHIVE_NAME = "android-ws-u22.04-cu12.8-v1.tar"
 Run = Callable[..., subprocess.CompletedProcess[str]]
 
 

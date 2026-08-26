@@ -46,9 +46,9 @@ describe("desktop connection state", () => {
 
   it("defaults launch setup to the desktop image and all GPUs", () => {
     expect(defaultLaunchSelection(
-      [{ id: "sha256:desktop", display_reference: "docker-ws:u22.04-cu12.8.1-v1-desktop" }],
+      [{ id: "sha256:desktop", display_reference: "android-ws:u22.04-cu12.8-v1" }],
       [{ uuid: "GPU-a" }, { uuid: "GPU-b" }],
-      "docker-ws:u22.04-cu12.8.1-v1-desktop",
+      "android-ws:u22.04-cu12.8-v1",
     )).toEqual({ image: "sha256:desktop", gpus: ["GPU-a", "GPU-b"] });
   });
 });

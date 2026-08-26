@@ -24,9 +24,10 @@ run_ws() {
 
 : >"$temporary_dir/docker.log"
 run_ws image build >"$temporary_dir/output"
-grep -Fx 'docker-ws:u22.04-cu12.8.1-v1-desktop: image built' "$temporary_dir/output" >/dev/null
+grep -Fx 'android-ws:u22.04-cu12.8-v1: image built from android-ws revision 1' "$temporary_dir/output" >/dev/null
 grep -F -- '<|buildx|build|--platform|linux/amd64|--file|' "$temporary_dir/docker.log" >/dev/null
-grep -F -- '/assets/docker/Dockerfile|' "$temporary_dir/docker.log" >/dev/null
+grep -F -- '/assets/images/android-ws/Dockerfile.android-ws-v1|' "$temporary_dir/docker.log" >/dev/null
+grep -F -- '|--target|desktop|--load|--tag|android-ws:u22.04-cu12.8-v1|' "$temporary_dir/docker.log" >/dev/null
 
 : >"$temporary_dir/docker.log"
 run_ws container status >"$temporary_dir/output"
@@ -36,6 +37,7 @@ grep -Fx 'docker-ws: absent' "$temporary_dir/output" >/dev/null
 ROBOTICS_WS_DESKTOP_IMAGE=docker-ws:test-desktop ROBOTICS_WS_DESKTOP_NAME=test-workstation run_ws container start --gpu none >"$temporary_dir/output"
 grep -Fx 'test-workstation: running' "$temporary_dir/output" >/dev/null
 grep -F -- '|--name|test-workstation|' "$temporary_dir/docker.log" >/dev/null
+grep -F -- '|--user|root|' "$temporary_dir/docker.log" >/dev/null
 grep -F -- "src=$code_root,dst=/workspace" "$temporary_dir/docker.log" >/dev/null
 grep -F -- "src=$state_root,dst=/state" "$temporary_dir/docker.log" >/dev/null
 ! test -e "$vnc_password_file"
