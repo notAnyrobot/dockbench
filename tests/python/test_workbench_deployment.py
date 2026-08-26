@@ -8,6 +8,7 @@ from docker_ws.core.workbench_deployment import (
     DeploymentError,
     DeploymentOptions,
     WorkbenchDeployment,
+    WorkbenchServiceStatus,
     load_runtime_config,
 )
 
@@ -75,6 +76,36 @@ def test_deploy_builds_before_install_and_systemd_unit_uses_serve(tmp_path, monk
     assert "docker-ws workbench serve --port 8787 --config" in unit
     assert "__WORKBENCH_" not in unit
     assert result.manager == "systemd"
+
+
+def test_systemd_unit_treats_uv_sigterm_exit_as_clean():
+    unit = (Path(__file__).parents[2] / "assets/systemd/docker-ws-workbench.service").read_text()
+    assert "SuccessExitStatus=143" in unit
+
+
+def test_start_starts_an_existing_systemd_deployment_without_rebuilding(tmp_path, monkeypatch):
+    deployment = _deployment(tmp_path)
+    deployment._mkdir_private(deployment.unit_path.parent)
+    deployment.unit_path.write_text("[Service]\n")
+    commands = []
+    expected = WorkbenchServiceStatus("systemd", "running", "active", deployment.url)
+
+    monkeypatch.setattr(deployment, "_systemd_probe", lambda: "available")
+    monkeypatch.setattr(deployment, "_command", lambda args, *, cwd: commands.append((args, cwd)))
+    monkeypatch.setattr(deployment, "status", lambda: expected)
+
+    assert deployment.start() == expected
+    assert commands == [
+        (["systemctl", "--user", "start", "docker-ws-workbench.service"], deployment.options.repository_root)
+    ]
+
+
+def test_start_requires_an_existing_systemd_deployment(tmp_path, monkeypatch):
+    deployment = _deployment(tmp_path)
+    monkeypatch.setattr(deployment, "_systemd_probe", lambda: "available")
+
+    with pytest.raises(DeploymentError, match="workbench deploy"):
+        deployment.start()
 
 
 def test_fallback_replaces_old_process_persists_metadata_and_status(tmp_path, monkeypatch):

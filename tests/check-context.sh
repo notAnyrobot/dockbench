@@ -2,7 +2,8 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-for file in .dockerignore pyproject.toml assets/images/android-ws/recipe.json \
+for file in .dockerignore pyproject.toml dependencies.txt scripts/bootstrap.sh \
+  assets/images/android-ws/recipe.json \
   assets/images/android-ws/Dockerfile.android-ws-v1 \
   assets/systemd/docker-ws-workbench.service docker_ws/cli/main.py \
   docker_ws/core/workstation.py docker_ws/core/images.py docker_ws/core/recipes.py \
@@ -10,6 +11,7 @@ for file in .dockerignore pyproject.toml assets/images/android-ws/recipe.json \
   docker_ws/core/workbench_deployment.py docker_ws/core/workbench_connection.py \
   docker_ws/web/app.py apps/workbench/package.json tests/python/test_recipes.py \
   tests/python/test_workbench_deployment.py tests/python/test_workbench_connection.py \
+  tests/helpers/fake-bootstrap-command tests/test-bootstrap.sh \
   tests/test-workstation.sh tests/test-cli.sh tests/test-package-images.sh; do
   test -f "$file" || { echo "missing: $file" >&2; exit 1; }
 done
@@ -32,8 +34,10 @@ grep -F 'workbench serve' assets/systemd/docker-ws-workbench.service >/dev/null
 grep -F '__WORKBENCH_CONFIG__' assets/systemd/docker-ws-workbench.service >/dev/null
 grep -F '__WORKBENCH_PORT__' assets/systemd/docker-ws-workbench.service >/dev/null
 grep -F 'run --frozen' assets/systemd/docker-ws-workbench.service >/dev/null
+grep -F 'SuccessExitStatus=143' assets/systemd/docker-ws-workbench.service >/dev/null
 
-bash -n tests/helpers/fake-docker tests/helpers/fake-vncviewer tests/test-workstation.sh \
+bash -n scripts/bootstrap.sh tests/helpers/fake-bootstrap-command tests/helpers/fake-docker \
+  tests/helpers/fake-vncviewer tests/test-bootstrap.sh tests/test-workstation.sh \
   tests/test-cli.sh tests/test-package-images.sh
 python3 -m py_compile docker_ws/cli/main.py docker_ws/core/workstation.py docker_ws/core/images.py \
   docker_ws/core/recipes.py docker_ws/core/image_builder.py docker_ws/core/image_verifier.py \
@@ -41,3 +45,4 @@ python3 -m py_compile docker_ws/cli/main.py docker_ws/core/workstation.py docker
 bash tests/test-workstation.sh
 bash tests/test-cli.sh
 bash tests/test-package-images.sh
+bash tests/test-bootstrap.sh

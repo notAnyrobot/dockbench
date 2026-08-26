@@ -1,0 +1,9 @@
+# Non-Python commands used by Docker Workstation.
+# Python and Python-package dependencies belong to pyproject.toml/uv.lock.
+# Format: command|scope|requirement|purpose
+bash|bootstrap|required|Run the bootstrap and repository shell checks.
+curl|bootstrap|required|Download the pinned uv and nvm installers over HTTPS.
+git|bootstrap|required|Clone this repository and install/update nvm.
+docker|remote|required|Build images and run workstation containers on the remote host.
+ssh|local|required|Open the loopback SSH tunnel from the local client.
+systemctl|remote|recommended|Run Workbench as a persistent user service; a detached fallback is available.

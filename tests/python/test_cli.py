@@ -31,6 +31,7 @@ def test_workbench_command_group_preserves_bare_serve_and_dispatches_actions(mon
                       "--state-root", "/state", "--docker-command", "podman"]) == 0
     assert main.main(["workbench", "connect", "hpc", "--local-port", "9002",
                       "--remote-port", "9001", "--no-open"]) == 0
+    assert main.main(["workbench", "start"]) == 0
     assert main.main(["workbench", "status"]) == 0
     assert main.main(["workbench", "stop"]) == 0
 
@@ -39,6 +40,7 @@ def test_workbench_command_group_preserves_bare_serve_and_dispatches_actions(mon
         ("serve", (9000, "/tmp/workbench.json")),
         ("deploy", (9001, "/code", "/state", "podman")),
         ("connect", ("hpc", 9002, 9001, False)),
+        ("status", ("start",)),
         ("status", ("status",)),
         ("status", ("stop",)),
     ]

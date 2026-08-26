@@ -167,7 +167,12 @@ def _deploy_workbench(port: int = DEFAULT_WORKBENCH_PORT, code_root: str | None 
 def _workbench_status(action: str) -> int:
     try:
         deployment = _deployment()
-        status = deployment.stop() if action == "stop" else deployment.status()
+        if action == "start":
+            status = deployment.start()
+        elif action == "stop":
+            status = deployment.stop()
+        else:
+            status = deployment.status()
         print(f"Docker Workbench: {status.state} ({status.manager or 'unmanaged'}) — {status.message}")
         if status.log_path:
             print(f"Log: {status.log_path}")
@@ -235,6 +240,7 @@ def parser() -> argparse.ArgumentParser:
     connect.add_argument("--local-port", type=_port, default=None, help="Explicit local loopback port; defaults to an available port.")
     connect.add_argument("--remote-port", type=_port, default=DEFAULT_WORKBENCH_PORT, help="Remote Workbench loopback port.")
     connect.add_argument("--no-open", action="store_true", help="Do not open the local browser automatically.")
+    workbench_actions.add_parser("start", help="Start an already deployed Workbench service without rebuilding.")
     workbench_actions.add_parser("status", help="Show deployed Workbench service status.")
     workbench_actions.add_parser("stop", help="Stop the deployed Workbench service.")
     container = actions.add_parser("container", help="Manage the workstation container.")

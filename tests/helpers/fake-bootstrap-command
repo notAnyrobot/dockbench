@@ -1,0 +1,9 @@
+#!/usr/bin/env bash
+case "$(basename "$0")" in
+  uv) printf 'uv 0.12.6\n' ;;
+  node) printf 'v22.23.2\n' ;;
+  npm) printf '10.9.8\n' ;;
+  docker) [[ -z "${FAKE_DOCKER_UNAVAILABLE:-}" ]] ;;
+  curl|git) exit 0 ;;
+  *) exit 1 ;;
+esac

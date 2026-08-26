@@ -399,6 +399,23 @@ class WorkbenchDeployment:
         state = (result.stdout or "unknown").strip()
         return WorkbenchServiceStatus("systemd", "running" if state == "active" else "stopped", state or (result.stderr or "unknown").strip(), url)
 
+    def start(self) -> WorkbenchServiceStatus:
+        """Start an already deployed user systemd service without rebuilding."""
+        if self._systemd_probe() == "unavailable":
+            raise DeploymentError(
+                "user systemd is unavailable; run `docker-ws workbench deploy` "
+                "to start the managed fallback process"
+            )
+        if not self.unit_path.is_file():
+            raise DeploymentError(
+                "Docker Workbench is not deployed; run `docker-ws workbench deploy` first"
+            )
+        self._command(
+            ["systemctl", "--user", "start", "docker-ws-workbench.service"],
+            cwd=self.options.repository_root,
+        )
+        return self.status()
+
     def stop(self) -> WorkbenchServiceStatus:
         metadata = self._read_metadata()
         if metadata and metadata.get("manager") == "process":

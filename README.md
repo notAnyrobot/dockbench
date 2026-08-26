@@ -136,8 +136,22 @@ history persist in the browser.
 
 ### Remote host deployment
 
-On the HPC or workstation that runs Docker, clone this repository and run one
-command from its checkout:
+On a new Linux HPC or workstation host, clone this repository and bootstrap the
+user-scoped tooling from its checkout:
+
+```bash
+./scripts/bootstrap.sh
+```
+
+When missing, the bootstrap installs pinned `uv` and `nvm` releases without
+`sudo`, then uses `nvm` to install Node 22 and npm. It does not install Docker
+because rootful vs. rootless Docker is a host policy decision; instead, it
+verifies that the current user can reach an existing Docker daemon. Non-Python
+command prerequisites are listed in [`dependencies.txt`](dependencies.txt);
+Python and Python-package dependencies remain exclusively managed by `uv`
+through `pyproject.toml` and `uv.lock`.
+
+Then build and deploy Workbench with:
 
 ```bash
 uv run docker-ws workbench deploy
@@ -151,13 +165,15 @@ explicit: deploy does not build `android-ws` or recreate containers.
 `workbench deploy` prefers a user-level systemd service and is safe to repeat
 after updating the checkout. If user systemd is unavailable, it runs a managed
 detached process instead. The fallback may be terminated by HPC systems when
-your login session ends; user systemd is the durable option. Use
-`uv run docker-ws workbench status` to inspect the service/process and
-`uv run docker-ws workbench stop` to stop it. Deployment configuration is kept
-under the XDG configuration directory and its logs are reported by the status
-and deployment commands. `ROBOTICS_WS_VNC_PASSWORD` is intentionally never
-persisted there. On systems using user systemd, enable linger when the service
-must survive logout:
+your login session ends; user systemd is the durable option. After deployment,
+use `uv run docker-ws workbench start` to start the user service without
+rebuilding, `uv run docker-ws workbench status` to inspect the service/process,
+and `uv run docker-ws workbench stop` to stop it. A host without user systemd
+must rerun `deploy` to start its managed fallback process. Deployment
+configuration is kept under the XDG configuration directory and its logs are
+reported by the status and deployment commands. `ROBOTICS_WS_VNC_PASSWORD` is
+intentionally never persisted there. On systems using user systemd, enable
+linger when the service must survive logout:
 
 ```bash
 loginctl enable-linger "$USER"
