@@ -3,9 +3,9 @@ from pathlib import Path
 
 import pytest
 
-from docker_ws.core.image_builder import ImageBuilder
-from docker_ws.core.image_verifier import DESKTOP_V1_COMMANDS, GENERIC_SHELL_CHECK, ImageVerifier
-from docker_ws.core.recipes import MAX_DOCKERFILE_BYTES, RecipeCatalog, RecipeError, UNSET, dockerfile_filename
+from dockbench.core.image_builder import ImageBuilder
+from dockbench.core.image_verifier import DESKTOP_V1_COMMANDS, GENERIC_SHELL_CHECK, ImageVerifier
+from dockbench.core.recipes import MAX_DOCKERFILE_BYTES, RecipeCatalog, RecipeError, UNSET, dockerfile_filename
 
 
 class FakeDocker:
@@ -124,7 +124,7 @@ def test_verifier_checks_generic_shell_only_when_no_desktop_contract():
     result = ImageVerifier(docker).verify("shell:latest")
     assert result.checks == ("shell",)
     assert docker.commands == [
-        ["image", "inspect", "--format", '{{index .Config.Labels "io.docker-workstation.desktop-contract"}}', "shell:latest"],
+        ["image", "inspect", "--format", '{{index .Config.Labels "io.github.notanyrobot.dockbench.desktop-contract"}}', "shell:latest"],
         ["run", "--rm", "--network", "none", "--entrypoint", "/bin/sh", "shell:latest", "-lc", GENERIC_SHELL_CHECK],
     ]
 

@@ -17,16 +17,16 @@ case "${1:-} ${2:-}" in
     test -f "$FAKE_DOCKER_STATE" || exit 1
     if [[ "$*" == *'{{.Image}}'* ]]; then
       printf '%s\n' "${FAKE_CONTAINER_IMAGE_ID:-sha256:test-image}"
-    elif [[ "$*" == *'robotics-ws.launch-config'* ]]; then
-      printf '%s\n' "${FAKE_LAUNCH_CONFIG:-}"
+    elif [[ "$*" == *'io.github.notanyrobot.dockbench.launch-spec'* ]]; then
+      test -n "${FAKE_LAUNCH_SPEC:-}" && test -f "$FAKE_LAUNCH_SPEC" && cat "$FAKE_LAUNCH_SPEC"
     else
       cat "$FAKE_DOCKER_STATE"
     fi
     ;;
-  "image ls") printf '%s\n' $'test-image\tdocker-ws\ttest-desktop' ;;
+  "image ls") printf '%s\n' $'test-image\tdockbench\ttest-desktop' ;;
   "image inspect")
     if [[ "$*" == *'{{json .}}'* ]]; then
-      printf '%s\n' '{"Id":"sha256:test-image","RepoTags":["docker-ws:test-desktop"],"Size":1,"Created":"2026-01-01T00:00:00Z","Architecture":"amd64","Config":{"Labels":{"io.docker-workstation.desktop-contract":"v1"}}}'
+      printf '%s\n' '{"Id":"sha256:test-image","RepoTags":["dockbench:test-desktop"],"Size":1,"Created":"2026-01-01T00:00:00Z","Architecture":"amd64","Config":{"Labels":{"io.github.notanyrobot.dockbench.desktop-contract":"v1"}}}'
     elif [[ "$*" == *'desktop-contract'* ]]; then
       printf '%s\n' 'v1'
     else
@@ -38,12 +38,24 @@ case "${1:-} ${2:-}" in
   "load --input") test -f "$3" ;;
   "run --rm") : ;;
   "run -d")
+    if test -n "${FAKE_LAUNCH_SPEC:-}"; then
+      for argument in "$@"; do
+        case "$argument" in
+          io.github.notanyrobot.dockbench.launch-spec=*)
+            printf '%s\n' "${argument#*=}" >"$FAKE_LAUNCH_SPEC"
+            ;;
+        esac
+      done
+    fi
     printf '%s\n' running >"$FAKE_DOCKER_STATE"
     printf '%s\n' test-container-id
     ;;
   "start "*) printf '%s\n' running >"$FAKE_DOCKER_STATE" ;;
   "stop "*) printf '%s\n' exited >"$FAKE_DOCKER_STATE" ;;
-  "rm "*) rm -f "$FAKE_DOCKER_STATE" ;;
+  "rm "*)
+    rm -f "$FAKE_DOCKER_STATE"
+    test -z "${FAKE_LAUNCH_SPEC:-}" || rm -f "$FAKE_LAUNCH_SPEC"
+    ;;
   "exec -i")
     cat >/dev/null
     if [[ "$*" == *'vncpasswd -f'* ]]; then

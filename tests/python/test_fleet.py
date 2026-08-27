@@ -1,11 +1,10 @@
-import json
 from pathlib import Path
 
 import pytest
 
-from docker_ws.core.errors import WorkstationError
-from docker_ws.core.host_inventory import GPU, LocalImage
-from docker_ws.core.workstation import FleetManager, WorkstationConfig
+from dockbench.core.errors import WorkstationError
+from dockbench.core.host_inventory import GPU, LocalImage
+from dockbench.core.workstation import FleetManager, WorkstationConfig
 
 
 class Inventory:
@@ -34,7 +33,7 @@ class Docker:
         self.commands.append(args)
         if args[:2] == ["container", "ls"]:
             filter_value = args[args.index("--filter") + 1]
-            if filter_value != "label=docker-ws.managed=true":
+            if filter_value != "label=io.github.notanyrobot.dockbench.managed=true":
                 raise WorkstationError(f"invalid filter: {filter_value}")
             return "\n".join(sorted(name for name, item in self.containers.items() if item["managed"]))
         if args[:2] == ["container", "inspect"]:
@@ -42,17 +41,15 @@ class Docker:
             if name not in self.containers: raise WorkstationError("missing")
             item = self.containers[name]
             command = " ".join(args)
-            if "docker-ws.launch-spec" in command: return item["spec"]
-            if "robotics-ws.launch-config" in command: return item.get("launch_config", "")
+            if "io.github.notanyrobot.dockbench.launch-spec" in command: return item["spec"]
             if "{{.Image}}" in command: return "sha256:image"
-            if "DeviceRequests" in command: return json.dumps(item.get("device_requests"))
             if "HostPort" in command: return "49123"
             return item["state"]
         if args[:2] == ["run", "--rm"]: return ""
         if args[:2] == ["run", "-d"]:
             name = args[args.index("--name") + 1]
-            spec = next(value.split("=", 1)[1] for value in args if value.startswith("docker-ws.launch-spec="))
-            self.containers[name] = {"state": "running", "spec": spec, "managed": "docker-ws.managed=true" in args}
+            spec = next(value.split("=", 1)[1] for value in args if value.startswith("io.github.notanyrobot.dockbench.launch-spec="))
+            self.containers[name] = {"state": "running", "spec": spec, "managed": "io.github.notanyrobot.dockbench.managed=true" in args}
             return "id"
         if args[0] == "start": self.containers[args[1]]["state"] = "running"; return ""
         if args[0] == "stop": self.containers[args[1]]["state"] = "exited"; return ""
@@ -63,19 +60,15 @@ class Docker:
 
 def config(tmp_path: Path):
     code = tmp_path / "Code"; code.mkdir()
-    return WorkstationConfig(tmp_path, "docker", code, tmp_path / ".robotics-ws", "1g", 1, 1, "user", "demo:image", "docker-ws", 5901, "vncviewer", "rootful", 1, 1)
+    return WorkstationConfig(tmp_path, "docker", code, tmp_path / ".dockbench", "1g", 1, 1, "user", "demo:image", "dockbench", 5901, "vncviewer", "rootful", 1, 1)
 
 
-def test_fleet_manages_only_labeled_and_valid_legacy_default(tmp_path):
+def test_fleet_ignores_old_containers_and_labels(tmp_path):
     configuration = config(tmp_path)
     docker = Docker(); docker.containers["other"] = {"state": "running", "spec": "", "managed": False}
-    # An arbitrary Docker container can use the configured name; only the
-    # historical Workstation launch label makes it a compatible legacy default.
     docker.containers["docker-ws"] = {"state": "exited", "spec": "", "managed": False}
     fleet = FleetManager(configuration, docker, Inventory())
     assert [item.container_name for item in fleet.containers()] == []
-    docker.containers["docker-ws"]["launch_config"] = configuration.launch_config
-    assert [item.container_name for item in fleet.containers()] == ["docker-ws"]
 
 
 def test_stale_when_recorded_reference_now_resolves_to_a_new_image_id(tmp_path):
@@ -116,7 +109,7 @@ def test_newly_created_named_container_is_discovered_by_docker_label(tmp_path):
 
     assert [item.container_name for item in fleet.containers()] == ["workstation-cpu-only"]
     listing = next(command for command in docker.commands if command[:2] == ["container", "ls"])
-    assert listing[listing.index("--filter") + 1] == "label=docker-ws.managed=true"
+    assert listing[listing.index("--filter") + 1] == "label=io.github.notanyrobot.dockbench.managed=true"
 
 
 def test_fleet_removes_managed_created_container_after_failed_startup(tmp_path):
@@ -124,9 +117,9 @@ def test_fleet_removes_managed_created_container_after_failed_startup(tmp_path):
         def run(self, args, **kwargs):
             if args[:2] == ["run", "-d"]:
                 name = args[args.index("--name") + 1]
-                spec = next(value.split("=", 1)[1] for value in args if value.startswith("docker-ws.launch-spec="))
+                spec = next(value.split("=", 1)[1] for value in args if value.startswith("io.github.notanyrobot.dockbench.launch-spec="))
                 self.commands.append(args)
-                self.containers[name] = {"state": "created", "spec": spec, "managed": "docker-ws.managed=true" in args}
+                self.containers[name] = {"state": "created", "spec": spec, "managed": "io.github.notanyrobot.dockbench.managed=true" in args}
                 raise WorkstationError("failed to start")
             return super().run(args, **kwargs)
 
@@ -159,20 +152,9 @@ def test_fleet_inventory_method_is_not_shadowed_by_host_inventory(tmp_path):
     assert [gpu["uuid"] for gpu in result["gpus"]] == ["GPU-a", "GPU-b"]
 
 
-def test_legacy_all_gpu_request_is_reflected_in_status_and_reservations(tmp_path):
-    configuration = config(tmp_path)
+def test_fleet_never_adopts_the_former_default_container_name(tmp_path):
     docker = Docker()
-    docker.containers["docker-ws"] = {
-        "state": "running",
-        "spec": "",
-        "managed": False,
-        "launch_config": configuration.launch_config,
-        "device_requests": [{"Count": -1, "DeviceIDs": None, "Capabilities": [["gpu"]]}],
-    }
-    fleet = FleetManager(configuration, docker, Inventory())
+    docker.containers["docker-ws"] = {"state": "running", "spec": "", "managed": False}
 
-    status = fleet.container("docker-ws")
-    inventory = fleet.inventory()
-
-    assert status.gpu_uuids == ("GPU-a", "GPU-b")
-    assert [gpu["reservation"] for gpu in inventory["gpus"]] == ["docker-ws", "docker-ws"]
+    with pytest.raises(WorkstationError, match="not managed"):
+        FleetManager(config(tmp_path), docker, Inventory()).container("docker-ws")

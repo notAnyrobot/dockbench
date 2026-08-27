@@ -11,8 +11,7 @@ import subprocess
 from dataclasses import asdict, dataclass
 from typing import Callable, Protocol
 
-from docker_ws.core.defaults import DEFAULT_IMAGE
-from docker_ws.core.errors import WorkstationError
+from dockbench.core.errors import WorkstationError
 
 
 class DockerRunner(Protocol):
@@ -21,7 +20,7 @@ class DockerRunner(Protocol):
 
 
 CommandRun = Callable[..., subprocess.CompletedProcess[str]]
-DESKTOP_CONTRACT_LABEL = "io.docker-workstation.desktop-contract"
+DESKTOP_CONTRACT_LABEL = "io.github.notanyrobot.dockbench.desktop-contract"
 
 
 @dataclass(frozen=True)
@@ -96,7 +95,7 @@ class HostInventory:
                 raise WorkstationError("Docker returned invalid image metadata") from exc
             labels = data.get("Config", {}).get("Labels") or {}
             references = tuple(sorted(set(data.get("RepoTags") or refs)))
-            desktop_contract = labels.get(DESKTOP_CONTRACT_LABEL) or ("v1" if DEFAULT_IMAGE in references else None)
+            desktop_contract = labels.get(DESKTOP_CONTRACT_LABEL)
             images.append(LocalImage(data.get("Id", short_id), references,
                 int(data.get("Size") or 0), data.get("Created") or "", data.get("Architecture") or "unknown",
                 desktop_contract))
@@ -104,7 +103,7 @@ class HostInventory:
 
     def resolve_image(self, selection: str) -> LocalImage:
         if not selection:
-            raise WorkstationError("an image is required when creating a workstation; use docker-ws image list")
+            raise WorkstationError("an image is required when creating a workstation; use `docker image ls` to inspect local images")
         for image in self.images():
             if selection == image.id or selection in image.references or image.id.startswith(selection):
                 return image

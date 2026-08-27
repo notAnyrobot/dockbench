@@ -1,4 +1,4 @@
-"""Deploy the loopback Workbench without requiring root privileges.
+"""Deploy the loopback Dockbench server without requiring root privileges.
 
 The module deliberately owns only the host-side process lifecycle.  It does
 not start Docker containers, and the server stays loopback-only; clients reach
@@ -18,26 +18,26 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Mapping
 
-from docker_ws.core.defaults import default_workspace
-from docker_ws.core.errors import WorkstationError
+from dockbench.core.defaults import default_workspace
+from dockbench.core.errors import WorkstationError
 
 
 class DeploymentError(WorkstationError):
-    """A safe, actionable failure while installing or operating Workbench."""
+    """A safe, actionable failure while installing or operating Dockbench."""
 
 
 _RUNTIME_ENVIRONMENT = frozenset({
-    "ROBOTICS_WS_WORKSPACE", "ROBOTICS_WS_CODE_ROOT", "ROBOTICS_WS_STATE_ROOT", "ROBOTICS_WS_DOCKER",
-    "ROBOTICS_WS_VNC_PORT", "ROBOTICS_WS_SHM_SIZE", "ROBOTICS_WS_HOST_UID",
-    "ROBOTICS_WS_HOST_GID", "ROBOTICS_WS_HOST_USER", "ROBOTICS_WS_DESKTOP_IMAGE",
-    "ROBOTICS_WS_DESKTOP_NAME", "ROBOTICS_WS_VNCVIEWER",
+    "DOCKBENCH_WORKSPACE", "DOCKBENCH_STATE_ROOT", "DOCKBENCH_DOCKER",
+    "DOCKBENCH_VNC_PORT", "DOCKBENCH_SHM_SIZE",
+    "DOCKBENCH_HOST_UID", "DOCKBENCH_HOST_GID", "DOCKBENCH_HOST_USER",
+    "DOCKBENCH_IMAGE", "DOCKBENCH_CONTAINER", "DOCKBENCH_VNC_VIEWER",
 })
 _SYSTEMD_UNAVAILABLE = ("failed to connect to bus", "no medium found", "not been booted")
 
 
 @dataclass(frozen=True)
 class DeploymentOptions:
-    """Inputs for a remote Workbench installation.
+    """Inputs for a remote Dockbench installation.
 
     ``config_home`` and ``state_home`` are primarily useful to test and to
     embed this API.  Normal CLI callers leave them unset for XDG defaults.
@@ -65,7 +65,7 @@ class DeploymentResult:
 
 
 @dataclass(frozen=True)
-class WorkbenchServiceStatus:
+class ServerStatus:
     manager: str | None
     state: str
     message: str
@@ -87,10 +87,10 @@ def load_runtime_config(path: Path) -> dict[str, str]:
     try:
         raw = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as exc:
-        raise DeploymentError(f"cannot read Workbench runtime config: {path}") from exc
+        raise DeploymentError(f"cannot read Dockbench runtime config: {path}") from exc
     values = raw.get("environment") if isinstance(raw, dict) else None
     if not isinstance(values, dict):
-        raise DeploymentError(f"invalid Workbench runtime config: {path}")
+        raise DeploymentError(f"invalid Dockbench runtime config: {path}")
     result: dict[str, str] = {}
     for key, value in values.items():
         if key in _RUNTIME_ENVIRONMENT and isinstance(value, str) and "\x00" not in value:
@@ -98,29 +98,29 @@ def load_runtime_config(path: Path) -> dict[str, str]:
     return result
 
 
-class WorkbenchDeployment:
+class ServerDeployment:
     """A small deployment facade designed for CLI integration and testing."""
 
     def __init__(self, options: DeploymentOptions) -> None:
         root = options.repository_root.expanduser().resolve()
         if not root.is_dir():
-            raise DeploymentError(f"Workbench repository does not exist: {root}")
+            raise DeploymentError(f"Dockbench repository does not exist: {root}")
         if not 1 <= options.port <= 65535:
-            raise DeploymentError("Workbench port must be between 1 and 65535")
+            raise DeploymentError("Dockbench port must be between 1 and 65535")
         self.options = DeploymentOptions(
             repository_root=root, port=options.port, workspace=options.workspace,
             state_root=options.state_root, docker_command=options.docker_command,
             config_home=options.config_home, state_home=options.state_home,
             health_timeout_seconds=options.health_timeout_seconds,
         )
-        self.config_dir = (options.config_home or _xdg_path("XDG_CONFIG_HOME", ".config")) / "docker-ws"
-        self.state_dir = (options.state_home or _xdg_path("XDG_STATE_HOME", ".local/state")) / "docker-ws" / "workbench"
-        self.config_path = self.config_dir / "workbench.json"
-        self.environment_path = self.config_dir / "workbench.env"
+        self.config_dir = (options.config_home or _xdg_path("XDG_CONFIG_HOME", ".config")) / "dockbench" / "server"
+        self.state_dir = (options.state_home or _xdg_path("XDG_STATE_HOME", ".local/state")) / "dockbench" / "server"
+        self.config_path = self.config_dir / "server.json"
+        self.environment_path = self.config_dir / "server.env"
         self.metadata_path = self.state_dir / "service.json"
-        self.pid_path = self.state_dir / "workbench.pid"
-        self.log_path = self.state_dir / "workbench.log"
-        self.unit_path = (options.config_home or _xdg_path("XDG_CONFIG_HOME", ".config")) / "systemd" / "user" / "docker-ws-workbench.service"
+        self.pid_path = self.state_dir / "server.pid"
+        self.log_path = self.state_dir / "server.log"
+        self.unit_path = (options.config_home or _xdg_path("XDG_CONFIG_HOME", ".config")) / "systemd" / "user" / "dockbench.service"
 
     @property
     def url(self) -> str:
@@ -128,19 +128,15 @@ class WorkbenchDeployment:
 
     def _snapshot_environment(self) -> dict[str, str]:
         environment = {key: os.environ[key] for key in _RUNTIME_ENVIRONMENT if key in os.environ}
-        workspace = self.options.workspace or Path(
-            environment.get("ROBOTICS_WS_WORKSPACE")
-            or environment.get("ROBOTICS_WS_CODE_ROOT")
-            or default_workspace()
-        )
-        environment.pop("ROBOTICS_WS_CODE_ROOT", None)
-        environment["ROBOTICS_WS_WORKSPACE"] = str(workspace.expanduser().resolve())
+        workspace = self.options.workspace or Path(environment.get("DOCKBENCH_WORKSPACE") or default_workspace())
+        environment["DOCKBENCH_WORKSPACE"] = str(workspace.expanduser().resolve())
         if self.options.state_root is not None:
-            environment["ROBOTICS_WS_STATE_ROOT"] = str(self.options.state_root.expanduser())
+            environment["DOCKBENCH_STATE_ROOT"] = str(self.options.state_root.expanduser())
         if self.options.docker_command is not None:
-            environment["ROBOTICS_WS_DOCKER"] = self.options.docker_command
-        # Defensive even if the allow list changes in the future.
-        environment.pop("ROBOTICS_WS_VNC_PASSWORD", None)
+            environment["DOCKBENCH_DOCKER"] = self.options.docker_command
+        # VNC credentials are accepted only from the live process environment;
+        # deployment configuration must never persist them.
+        environment.pop("DOCKBENCH_VNC_PASSWORD", None)
         return environment
 
     @staticmethod
@@ -200,7 +196,7 @@ class WorkbenchDeployment:
     def _build(self, uv: str, npm: str) -> None:
         app = self.options.repository_root / "apps" / "workbench"
         if not app.is_dir():
-            raise DeploymentError(f"Workbench frontend directory does not exist: {app}")
+            raise DeploymentError(f"Dockbench frontend directory does not exist: {app}")
         self._command([uv, "sync", "--frozen"], cwd=self.options.repository_root)
         self._command([npm, "ci"], cwd=app)
         self._command([npm, "run", "build"], cwd=app)
@@ -222,17 +218,17 @@ class WorkbenchDeployment:
         raise DeploymentError(f"user systemd is available but unhealthy: {(result.stderr or result.stdout).strip()}")
 
     def _install_systemd(self, uv: str) -> DeploymentResult:
-        template_path = self.options.repository_root / "assets" / "systemd" / "docker-ws-workbench.service"
+        template_path = self.options.repository_root / "assets" / "systemd" / "dockbench.service"
         try:
             template = template_path.read_text(encoding="utf-8")
         except OSError as exc:
-            raise DeploymentError(f"cannot read Workbench service template: {template_path}") from exc
+            raise DeploymentError(f"cannot read Dockbench service template: {template_path}") from exc
         substitutions = {
-            "__WORKBENCH_ROOT__": str(self.options.repository_root),
+            "__SERVER_ROOT__": str(self.options.repository_root),
             "__UV_EXECUTABLE__": uv,
-            "__WORKBENCH_CONFIG__": str(self.config_path),
-            "__WORKBENCH_ENV_FILE__": str(self.environment_path),
-            "__WORKBENCH_PORT__": str(self.options.port),
+            "__SERVER_CONFIG__": str(self.config_path),
+            "__SERVER_ENV_FILE__": str(self.environment_path),
+            "__SERVER_PORT__": str(self.options.port),
         }
         for old, new in substitutions.items():
             template = template.replace(old, new)
@@ -240,14 +236,14 @@ class WorkbenchDeployment:
         self._write_private(self.unit_path, template)
         for command in (
             ["systemctl", "--user", "daemon-reload"],
-            ["systemctl", "--user", "enable", "docker-ws-workbench.service"],
-            ["systemctl", "--user", "restart", "docker-ws-workbench.service"],
+            ["systemctl", "--user", "enable", "dockbench.service"],
+            ["systemctl", "--user", "restart", "dockbench.service"],
         ):
             self._command(command, cwd=self.options.repository_root)
         return DeploymentResult("systemd", self.url, self.config_path, self.environment_path, unit_path=self.unit_path)
 
     def _fallback_command(self, uv: str) -> list[str]:
-        return [uv, "run", "--frozen", "--project", str(self.options.repository_root), "docker-ws", "workbench", "serve", "--port", str(self.options.port), "--config", str(self.config_path)]
+        return [uv, "run", "--frozen", "--project", str(self.options.repository_root), "dockbench", "serve", "--port", str(self.options.port), "--config", str(self.config_path)]
 
     def _install_fallback(self, uv: str, environment: Mapping[str, str]) -> DeploymentResult:
         self._stop_managed_fallback()
@@ -259,7 +255,7 @@ class WorkbenchDeployment:
             log = self.log_path.open("a", encoding="utf-8")
             process = subprocess.Popen(command, cwd=self.options.repository_root, env=runtime_env, stdin=subprocess.DEVNULL, stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
         except OSError as exc:
-            raise DeploymentError(f"cannot start managed Workbench process: {exc}") from exc
+            raise DeploymentError(f"cannot start managed Dockbench process: {exc}") from exc
         finally:
             if "log" in locals():
                 log.close()
@@ -281,12 +277,12 @@ class WorkbenchDeployment:
             except (urllib.error.URLError, OSError, json.JSONDecodeError) as exc:
                 last_error = str(exc.reason if isinstance(exc, urllib.error.URLError) else exc)
             time.sleep(0.2)
-        diagnostics = f"See journalctl --user -u docker-ws-workbench.service" if result.manager == "systemd" else f"See {self.log_path}"
-        raise DeploymentError(f"Workbench did not become healthy at {self.url}: {last_error}. {diagnostics}")
+        diagnostics = f"See journalctl --user -u dockbench.service" if result.manager == "systemd" else f"See {self.log_path}"
+        raise DeploymentError(f"Dockbench did not become healthy at {self.url}: {last_error}. {diagnostics}")
 
     def deploy(self) -> DeploymentResult:
         environment = self._snapshot_environment()
-        workspace = Path(environment["ROBOTICS_WS_WORKSPACE"])
+        workspace = Path(environment["DOCKBENCH_WORKSPACE"])
         if not workspace.is_dir():
             raise DeploymentError(
                 f"workspace does not exist: {workspace}; create it or pass `--workspace PATH`"
@@ -366,7 +362,7 @@ class WorkbenchDeployment:
         except ProcessLookupError:
             return
         except PermissionError as exc:
-            raise DeploymentError(f"cannot stop managed Workbench process {pid}: {exc}") from exc
+            raise DeploymentError(f"cannot stop managed Dockbench process {pid}: {exc}") from exc
         deadline = time.monotonic() + 5
         while self._pid_alive(pid) and time.monotonic() < deadline:
             time.sleep(0.1)
@@ -381,7 +377,7 @@ class WorkbenchDeployment:
         if isinstance(pid, int):
             if not isinstance(identity, int):
                 raise DeploymentError(
-                    f"cannot safely stop managed Workbench PID {pid}: its process identity is missing; "
+                    f"cannot safely stop managed Dockbench PID {pid}: its process identity is missing; "
                     "stop it manually before redeploying"
                 )
             self._stop_process(pid, expected=identity)
@@ -393,48 +389,48 @@ class WorkbenchDeployment:
         value = metadata.get("url")
         return value if isinstance(value, str) and value.startswith("http://127.0.0.1:") else fallback
 
-    def status(self) -> WorkbenchServiceStatus:
+    def status(self) -> ServerStatus:
         metadata = self._read_metadata()
         url = self._saved_url(metadata or {}, self.url)
         if metadata and metadata.get("manager") == "process":
             pid = metadata.get("pid")
             identity = metadata.get("process_identity")
             if isinstance(pid, int) and self._pid_matches(pid, identity if isinstance(identity, int) else None):
-                return WorkbenchServiceStatus("process", "running", "managed fallback process is running", url, pid, self.log_path)
-            return WorkbenchServiceStatus("process", "stopped", "managed fallback process is not running", url, pid if isinstance(pid, int) else None, self.log_path)
+                return ServerStatus("process", "running", "managed fallback process is running", url, pid, self.log_path)
+            return ServerStatus("process", "stopped", "managed fallback process is not running", url, pid if isinstance(pid, int) else None, self.log_path)
         if self._systemd_probe() == "unavailable":
-            return WorkbenchServiceStatus(None, "absent", "user systemd is unavailable and no managed fallback exists", url)
+            return ServerStatus(None, "absent", "user systemd is unavailable and no managed fallback exists", url)
         try:
-            result = subprocess.run(["systemctl", "--user", "is-active", "docker-ws-workbench.service"], text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False)
+            result = subprocess.run(["systemctl", "--user", "is-active", "dockbench.service"], text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False)
         except OSError as exc:
-            raise DeploymentError(f"cannot inspect Workbench service: {exc}") from exc
+            raise DeploymentError(f"cannot inspect Dockbench service: {exc}") from exc
         state = (result.stdout or "unknown").strip()
-        return WorkbenchServiceStatus("systemd", "running" if state == "active" else "stopped", state or (result.stderr or "unknown").strip(), url)
+        return ServerStatus("systemd", "running" if state == "active" else "stopped", state or (result.stderr or "unknown").strip(), url)
 
-    def start(self) -> WorkbenchServiceStatus:
+    def start(self) -> ServerStatus:
         """Start an already deployed user systemd service without rebuilding."""
         if self._systemd_probe() == "unavailable":
             raise DeploymentError(
-                "user systemd is unavailable; run `docker-ws workbench deploy` "
+                "user systemd is unavailable; run `dockbench deploy` "
                 "to start the managed fallback process"
             )
         if not self.unit_path.is_file():
             raise DeploymentError(
-                "Docker Workbench is not deployed; run `docker-ws workbench deploy` first"
+                "Dockbench is not deployed; run `dockbench deploy` first"
             )
         self._command(
-            ["systemctl", "--user", "start", "docker-ws-workbench.service"],
+            ["systemctl", "--user", "start", "dockbench.service"],
             cwd=self.options.repository_root,
         )
         return self.status()
 
-    def stop(self) -> WorkbenchServiceStatus:
+    def stop(self) -> ServerStatus:
         metadata = self._read_metadata()
         if metadata and metadata.get("manager") == "process":
             pid = metadata.get("pid")
             self._stop_managed_fallback()
-            return WorkbenchServiceStatus("process", "stopped", "managed fallback process stopped", self._saved_url(metadata, self.url), pid if isinstance(pid, int) else None, self.log_path)
+            return ServerStatus("process", "stopped", "managed fallback process stopped", self._saved_url(metadata, self.url), pid if isinstance(pid, int) else None, self.log_path)
         if self._systemd_probe() == "unavailable":
-            return WorkbenchServiceStatus(None, "absent", "no Workbench service is running", self.url)
-        self._command(["systemctl", "--user", "stop", "docker-ws-workbench.service"], cwd=self.options.repository_root)
-        return WorkbenchServiceStatus("systemd", "stopped", "user service stopped", self.url)
+            return ServerStatus(None, "absent", "no Dockbench service is running", self.url)
+        self._command(["systemctl", "--user", "stop", "dockbench.service"], cwd=self.options.repository_root)
+        return ServerStatus("systemd", "stopped", "user service stopped", self.url)

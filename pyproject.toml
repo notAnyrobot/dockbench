@@ -1,7 +1,7 @@
 [project]
-name = "docker-workstation-workbench"
+name = "dockbench"
 version = "0.1.0"
-description = "Loopback-only desktop Workbench for docker-ws"
+description = "Browser workbench for managed development containers on Docker hosts"
 requires-python = ">=3.12,<3.13"
 dependencies = [
   "fastapi>=0.115,<1",
@@ -9,14 +9,14 @@ dependencies = [
 ]
 
 [project.scripts]
-docker-ws = "docker_ws.cli.main:main"
+dockbench = "dockbench.cli.main:main"
 
 [build-system]
 requires = ["hatchling>=1.26"]
 build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
-packages = ["docker_ws"]
+packages = ["dockbench"]
 
 [dependency-groups]
 dev = ["httpx>=0.27", "pytest>=8", "pytest-asyncio>=0.24"]

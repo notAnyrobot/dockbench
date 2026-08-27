@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { dockHeight, inspectorWidth, loadActivity, recordActivity } from "./activity";
 
-describe("workbench activity and layout", () => {
+describe("dockbench activity and layout", () => {
   it("keeps the current panel defaults and clamps unsafe sizes", () => {
     expect(inspectorWidth(1685, 330)).toBe(330);
     expect(inspectorWidth(1685, 600)).toBe(400);
@@ -16,7 +16,7 @@ describe("workbench activity and layout", () => {
   });
 
   it("records an operation with a timestamp", () => {
-    const entries = recordActivity([], "Stopping docker-ws…", "info", new Date("2026-08-26T00:00:00Z"));
-    expect(entries[0]).toMatchObject({ level: "info", message: "Stopping docker-ws…" });
+    const entries = recordActivity([], "Stopping dockbench…", "info", new Date("2026-08-26T00:00:00Z"));
+    expect(entries[0]).toMatchObject({ level: "info", message: "Stopping dockbench…" });
   });
 });

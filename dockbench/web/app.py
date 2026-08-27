@@ -1,4 +1,4 @@
-"""Same-origin FastAPI host for the desktop-first Workbench."""
+"""Same-origin FastAPI host for the desktop-first Dockbench browser app."""
 from __future__ import annotations
 
 import asyncio
@@ -25,17 +25,17 @@ from starlette.background import BackgroundTask
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from docker_ws.core.defaults import DEFAULT_IMAGE
-from docker_ws.core.errors import DockerCommandError
-from docker_ws.core.workstation import (
+from dockbench.core.defaults import DEFAULT_IMAGE
+from dockbench.core.errors import DockerCommandError
+from dockbench.core.workstation import (
     Workstation,
     WorkstationError,
     WorkstationGPUConflict,
     WorkstationRebuildRequired,
     WorkstationReplaceRequired,
 )
-from docker_ws.core.host_inventory import HostInventory
-from docker_ws.core.recipes import RecipeError
+from dockbench.core.host_inventory import HostInventory
+from dockbench.core.recipes import RecipeError
 
 LOG = logging.getLogger(__name__)
 ROOT = Path(__file__).resolve().parents[2]
@@ -48,7 +48,7 @@ MAX_IMAGE_JOB_LOG_LINES = 2000
 class DesktopSession:
     port: int
     expires_at: float
-    container_name: str = "docker-ws"
+    container_name: str = "dockbench"
     used: bool = False
 
 
@@ -80,7 +80,7 @@ _ANSI_ESCAPE = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
 
 
 def _redact_image_log(value: str) -> str:
-    """Keep job logs useful without making the Workbench a secret sink."""
+    """Keep job logs useful without making Dockbench a secret sink."""
     return _SENSITIVE_LOG_VALUE.sub(r"\1\2[REDACTED]", value)
 
 
@@ -156,7 +156,7 @@ class DesktopSessions:
         self._sessions: dict[str, DesktopSession] = {}
         self._lock = asyncio.Lock()
 
-    async def create(self, port: int, container_name: str = "docker-ws") -> str:
+    async def create(self, port: int, container_name: str = "dockbench") -> str:
         async with self._lock:
             self._purge()
             session_id = secrets.token_urlsafe(32)
@@ -207,7 +207,7 @@ class TerminalSessions:
 
 def safe_error(exc: Exception) -> JSONResponse:
     correlation_id = uuid.uuid4().hex
-    LOG.warning("workbench request failed id=%s kind=%s", correlation_id, type(exc).__name__)
+    LOG.warning("dockbench request failed id=%s kind=%s", correlation_id, type(exc).__name__)
     if isinstance(exc, RecipeError):
         status = 409 if "already exists" in str(exc) else 422
         return JSONResponse(status_code=status, content={"code": "invalid_recipe", "message": str(exc), "correlation_id": correlation_id})
@@ -220,7 +220,7 @@ def safe_error(exc: Exception) -> JSONResponse:
                 "code": "workstation_rebuild_required",
                 "message": (
                     "The workstation image or launch settings changed. Run "
-                    "`uv run docker-ws image rebuild`, then try again."
+                    "`uv run dockbench image rebuild`, then try again."
                 ),
                 "correlation_id": correlation_id,
             },
@@ -244,8 +244,8 @@ def safe_error(exc: Exception) -> JSONResponse:
             },
         )
     if isinstance(exc, WorkstationError):
-        return JSONResponse(status_code=503, content={"code": "workstation_unavailable", "message": "Docker Workstation is unavailable. Check its status and try again.", "correlation_id": correlation_id})
-    return JSONResponse(status_code=500, content={"code": "internal_error", "message": "Workbench could not complete the request.", "correlation_id": correlation_id})
+        return JSONResponse(status_code=503, content={"code": "workstation_unavailable", "message": "Dockbench is unavailable. Check its status and try again.", "correlation_id": correlation_id})
+    return JSONResponse(status_code=500, content={"code": "internal_error", "message": "Dockbench could not complete the request.", "correlation_id": correlation_id})
 
 
 def _origin_for(request: Request) -> str:
@@ -262,16 +262,16 @@ def _require_csrf(request: Request, csrf_cookie: str | None) -> None:
 
 
 def _issue_csrf(response: Response, current: str | None) -> str:
-    """Reuse the browser-wide token so opening another Workbench tab cannot invalidate it."""
+    """Reuse the browser-wide token so opening another Dockbench tab cannot invalidate it."""
     token = current if current and 20 <= len(current) <= 256 else secrets.token_urlsafe(32)
-    response.set_cookie("workbench_csrf", token, httponly=False, samesite="strict", secure=False, path="/")
+    response.set_cookie("dockbench_csrf", token, httponly=False, samesite="strict", secure=False, path="/")
     return token
 
 
 def create_app(workstation: Workstation | None = None, fleet: Any | None = None,
                recipes: Any | None = None, image_builder: Any | None = None,
                image_verifier: Any | None = None) -> FastAPI:
-    app = FastAPI(title="Docker Workstation Workbench", docs_url=None, redoc_url=None, openapi_url=None)
+    app = FastAPI(title="Dockbench", docs_url=None, redoc_url=None, openapi_url=None)
     app.state.workstation = workstation
     app.state.fleet = fleet
     app.state.sessions = DesktopSessions()
@@ -303,7 +303,7 @@ def create_app(workstation: Workstation | None = None, fleet: Any | None = None,
 
         Deployment and SSH-tunnel clients use this endpoint as their readiness
         probe.  It deliberately avoids the workstation and fleet services so a
-        reachable Workbench can still report ready while Docker is stopped or
+        reachable Dockbench server can still report ready while Docker is stopped or
         temporarily unavailable.
         """
         return {"status": "ok"}
@@ -325,7 +325,7 @@ def create_app(workstation: Workstation | None = None, fleet: Any | None = None,
         if not hasattr(workstation, "config"):
             raise WorkstationError("managed fleet is unavailable")
         try:
-            from docker_ws.core.workstation import FleetManager
+            from dockbench.core.workstation import FleetManager
         except ImportError as exc:  # pragma: no cover - protects partial installs
             raise WorkstationError("managed fleet is unavailable") from exc
         app.state.fleet = FleetManager(workstation.config, runner=workstation.docker, inventory=workstation.inventory)
@@ -340,19 +340,19 @@ def create_app(workstation: Workstation | None = None, fleet: Any | None = None,
     def recipe_catalog() -> Any:
         """The web layer only adapts the core recipe service; it owns no files."""
         if app.state.recipes is None:
-            from docker_ws.core.recipes import RecipeCatalog
+            from dockbench.core.recipes import RecipeCatalog
             app.state.recipes = RecipeCatalog(managed_fleet().config.repository_root / "assets" / "images")
         return app.state.recipes
 
     def recipe_builder() -> Any:
         if app.state.image_builder is None:
-            from docker_ws.core.image_builder import ImageBuilder
+            from dockbench.core.image_builder import ImageBuilder
             app.state.image_builder = ImageBuilder(managed_fleet().docker)
         return app.state.image_builder
 
     def image_verifier() -> Any:
         if app.state.image_verifier is None:
-            from docker_ws.core.image_verifier import ImageVerifier
+            from dockbench.core.image_verifier import ImageVerifier
             app.state.image_verifier = ImageVerifier(managed_fleet().docker)
         return app.state.image_verifier
 
@@ -375,8 +375,8 @@ def create_app(workstation: Workstation | None = None, fleet: Any | None = None,
                 await socket.close(code=1012)
 
     @app.get("/api/workstation")
-    async def workstation_status(response: Response, workbench_csrf: str | None = Cookie(default=None)):
-        token = _issue_csrf(response, workbench_csrf)
+    async def workstation_status(response: Response, dockbench_csrf: str | None = Cookie(default=None)):
+        token = _issue_csrf(response, dockbench_csrf)
         try:
             return {**ws().status().public(), "csrf_token": token}
         except Exception as exc:
@@ -403,8 +403,8 @@ def create_app(workstation: Workstation | None = None, fleet: Any | None = None,
         return result
 
     @app.get("/api/containers")
-    async def containers(response: Response, workbench_csrf: str | None = Cookie(default=None)):
-        token = _issue_csrf(response, workbench_csrf)
+    async def containers(response: Response, dockbench_csrf: str | None = Cookie(default=None)):
+        token = _issue_csrf(response, dockbench_csrf)
         try:
             items = await _fleet_call("containers")
             return {"containers": [container_public(item) for item in items], "csrf_token": token}
@@ -419,8 +419,8 @@ def create_app(workstation: Workstation | None = None, fleet: Any | None = None,
             return safe_error(exc)
 
     @app.post("/api/containers")
-    async def create_container(body: ContainerCreateRequest, request: Request, workbench_csrf: str | None = Cookie(default=None)):
-        _require_csrf(request, workbench_csrf)
+    async def create_container(body: ContainerCreateRequest, request: Request, dockbench_csrf: str | None = Cookie(default=None)):
+        _require_csrf(request, dockbench_csrf)
         try:
             status = await _fleet_call("create", body.name, body.image, tuple(body.gpu_uuids), body.all_gpus)
             return container_public(status)
@@ -428,16 +428,16 @@ def create_app(workstation: Workstation | None = None, fleet: Any | None = None,
             return safe_error(exc)
 
     @app.post("/api/containers/{name}/start")
-    async def start_container(name: str, request: Request, workbench_csrf: str | None = Cookie(default=None)):
-        _require_csrf(request, workbench_csrf)
+    async def start_container(name: str, request: Request, dockbench_csrf: str | None = Cookie(default=None)):
+        _require_csrf(request, dockbench_csrf)
         try:
             return container_public(await _fleet_call("start", name))
         except Exception as exc:
             return safe_error(exc)
 
     @app.post("/api/containers/{name}/stop")
-    async def stop_container(name: str, request: Request, workbench_csrf: str | None = Cookie(default=None)):
-        _require_csrf(request, workbench_csrf)
+    async def stop_container(name: str, request: Request, dockbench_csrf: str | None = Cookie(default=None)):
+        _require_csrf(request, dockbench_csrf)
         try:
             status = await _fleet_call("stop", name)
             await _close_desktop_sockets(name)
@@ -446,8 +446,8 @@ def create_app(workstation: Workstation | None = None, fleet: Any | None = None,
             return safe_error(exc)
 
     @app.post("/api/containers/{name}/remove")
-    async def remove_container(name: str, request: Request, workbench_csrf: str | None = Cookie(default=None)):
-        _require_csrf(request, workbench_csrf)
+    async def remove_container(name: str, request: Request, dockbench_csrf: str | None = Cookie(default=None)):
+        _require_csrf(request, dockbench_csrf)
         try:
             await _fleet_call("remove", name)
             await _close_desktop_sockets(name)
@@ -456,12 +456,12 @@ def create_app(workstation: Workstation | None = None, fleet: Any | None = None,
             return safe_error(exc)
 
     @app.delete("/api/containers/{name}")
-    async def remove_container_delete(name: str, request: Request, workbench_csrf: str | None = Cookie(default=None)):
-        return await remove_container(name, request, workbench_csrf)
+    async def remove_container_delete(name: str, request: Request, dockbench_csrf: str | None = Cookie(default=None)):
+        return await remove_container(name, request, dockbench_csrf)
 
     @app.delete("/api/containers/{name}/state")
-    async def delete_container_state(name: str, request: Request, workbench_csrf: str | None = Cookie(default=None)):
-        _require_csrf(request, workbench_csrf)
+    async def delete_container_state(name: str, request: Request, dockbench_csrf: str | None = Cookie(default=None)):
+        _require_csrf(request, dockbench_csrf)
         try:
             await _fleet_call("delete_state", name)
             return {"state_deleted": True, "name": name}
@@ -477,8 +477,8 @@ def create_app(workstation: Workstation | None = None, fleet: Any | None = None,
             return safe_error(exc)
 
     @app.post("/api/containers/{name}/recreate")
-    async def recreate_container(name: str, request: Request, workbench_csrf: str | None = Cookie(default=None)):
-        _require_csrf(request, workbench_csrf)
+    async def recreate_container(name: str, request: Request, dockbench_csrf: str | None = Cookie(default=None)):
+        _require_csrf(request, dockbench_csrf)
         try:
             status = await _fleet_call("recreate", name)
             await _close_desktop_sockets(name)
@@ -512,8 +512,8 @@ def create_app(workstation: Workstation | None = None, fleet: Any | None = None,
             return safe_error(exc)
 
     @app.get("/api/image-recipes")
-    async def image_recipes(response: Response, workbench_csrf: str | None = Cookie(default=None)):
-        token = _issue_csrf(response, workbench_csrf)
+    async def image_recipes(response: Response, dockbench_csrf: str | None = Cookie(default=None)):
+        token = _issue_csrf(response, dockbench_csrf)
         try:
             items = await run_in_threadpool(recipe_catalog().list)
             return {"recipes": [recipe_public(item) for item in items], "csrf_token": token}
@@ -522,8 +522,8 @@ def create_app(workstation: Workstation | None = None, fleet: Any | None = None,
 
     @app.post("/api/image-recipes")
     async def create_image_recipe(body: RecipeCreateRequest, request: Request,
-                                  workbench_csrf: str | None = Cookie(default=None)):
-        _require_csrf(request, workbench_csrf)
+                                  dockbench_csrf: str | None = Cookie(default=None)):
+        _require_csrf(request, dockbench_csrf)
         try:
             recipe = await run_in_threadpool(
                 recipe_catalog().create, body.id, body.dockerfile,
@@ -535,8 +535,8 @@ def create_app(workstation: Workstation | None = None, fleet: Any | None = None,
 
     @app.post("/api/image-recipes/{recipe_id}/revisions")
     async def revise_image_recipe(recipe_id: str, body: RecipeReviseRequest, request: Request,
-                                  workbench_csrf: str | None = Cookie(default=None)):
-        _require_csrf(request, workbench_csrf)
+                                  dockbench_csrf: str | None = Cookie(default=None)):
+        _require_csrf(request, dockbench_csrf)
         try:
             # Only pass requested defaults: omitted fields retain their prior
             # manifest values while an explicit null target clears the target.
@@ -575,7 +575,7 @@ def create_app(workstation: Workstation | None = None, fleet: Any | None = None,
                         job.message = _safe_docker_error(str(exc))
                         report(job.message)
                     else:
-                        job.message = "Image operation failed. Check Docker Workstation logs and try again."
+                        job.message = "Image operation failed. Check Dockbench logs and try again."
                     report("failed")
                 else:
                     if isinstance(output, str) and output:
@@ -588,8 +588,8 @@ def create_app(workstation: Workstation | None = None, fleet: Any | None = None,
         return job
 
     @app.post("/api/images/build")
-    async def build_image(body: ImageBuildRequest, request: Request, workbench_csrf: str | None = Cookie(default=None)):
-        _require_csrf(request, workbench_csrf)
+    async def build_image(body: ImageBuildRequest, request: Request, dockbench_csrf: str | None = Cookie(default=None)):
+        _require_csrf(request, dockbench_csrf)
         try:
             recipe = await run_in_threadpool(recipe_catalog().get, body.recipe_id)
 
@@ -606,8 +606,8 @@ def create_app(workstation: Workstation | None = None, fleet: Any | None = None,
             return safe_error(exc)
 
     @app.post("/api/images/{image_id}/verify")
-    async def verify_image(image_id: str, request: Request, workbench_csrf: str | None = Cookie(default=None)):
-        _require_csrf(request, workbench_csrf)
+    async def verify_image(image_id: str, request: Request, dockbench_csrf: str | None = Cookie(default=None)):
+        _require_csrf(request, dockbench_csrf)
         try:
             job = start_image_job("verify", lambda _report: image_verifier().verify(image_id))
             return {"id": job.id, "kind": job.kind, "state": job.state}
@@ -623,9 +623,9 @@ def create_app(workstation: Workstation | None = None, fleet: Any | None = None,
                 "code": job.code, "created_at": job.created_at, "logs": job.logs}
 
     @app.post("/api/images/load")
-    async def load_image(request: Request, workbench_csrf: str | None = Cookie(default=None)):
-        _require_csrf(request, workbench_csrf)
-        temporary = tempfile.NamedTemporaryFile(prefix="docker-ws-image-", suffix=".tar", delete=False)
+    async def load_image(request: Request, dockbench_csrf: str | None = Cookie(default=None)):
+        _require_csrf(request, dockbench_csrf)
+        temporary = tempfile.NamedTemporaryFile(prefix="dockbench-image-", suffix=".tar", delete=False)
         temporary_path = Path(temporary.name)
         try:
             async for chunk in request.stream():
@@ -657,7 +657,7 @@ def create_app(workstation: Workstation | None = None, fleet: Any | None = None,
         try:
             manager = managed_fleet()
             image = await run_in_threadpool(HostInventory(manager.docker).resolve_image, image_id)
-            temporary = tempfile.NamedTemporaryFile(prefix="docker-ws-image-", suffix=".tar", delete=False)
+            temporary = tempfile.NamedTemporaryFile(prefix="dockbench-image-", suffix=".tar", delete=False)
             temporary_path = Path(temporary.name)
             temporary.close()
             await run_in_threadpool(manager.docker.run, ["image", "save", "--output", str(temporary_path), image.id])
@@ -669,8 +669,8 @@ def create_app(workstation: Workstation | None = None, fleet: Any | None = None,
             return safe_error(exc)
 
     @app.post("/api/workstation/start")
-    async def start_workstation(request: Request, body: StartRequest | None = None, workbench_csrf: str | None = Cookie(default=None)):
-        _require_csrf(request, workbench_csrf)
+    async def start_workstation(request: Request, body: StartRequest | None = None, dockbench_csrf: str | None = Cookie(default=None)):
+        _require_csrf(request, dockbench_csrf)
         try:
             if body is None:
                 return (await run_in_threadpool(ws().start)).public()
@@ -678,8 +678,8 @@ def create_app(workstation: Workstation | None = None, fleet: Any | None = None,
         except Exception as exc: return safe_error(exc)
 
     @app.post("/api/workstation/stop")
-    async def stop_workstation(request: Request, workbench_csrf: str | None = Cookie(default=None)):
-        _require_csrf(request, workbench_csrf)
+    async def stop_workstation(request: Request, dockbench_csrf: str | None = Cookie(default=None)):
+        _require_csrf(request, dockbench_csrf)
         try:
             result = await run_in_threadpool(ws().stop)
             # A stopped container invalidates every active VNC transport.
@@ -689,8 +689,8 @@ def create_app(workstation: Workstation | None = None, fleet: Any | None = None,
         except Exception as exc: return safe_error(exc)
 
     @app.post("/api/desktop/sessions")
-    async def create_desktop_session(body: SessionRequest, request: Request, workbench_csrf: str | None = Cookie(default=None)):
-        _require_csrf(request, workbench_csrf)
+    async def create_desktop_session(body: SessionRequest, request: Request, dockbench_csrf: str | None = Cookie(default=None)):
+        _require_csrf(request, dockbench_csrf)
         try:
             endpoint = await run_in_threadpool(ws().ensure_desktop, body.password)
             session_id = await app.state.sessions.create(endpoint.port)
@@ -698,16 +698,16 @@ def create_app(workstation: Workstation | None = None, fleet: Any | None = None,
         except Exception as exc: return safe_error(exc)
 
     @app.post("/api/desktop/password")
-    async def reset_desktop_password(body: PasswordResetRequest, request: Request, workbench_csrf: str | None = Cookie(default=None)):
-        _require_csrf(request, workbench_csrf)
+    async def reset_desktop_password(body: PasswordResetRequest, request: Request, dockbench_csrf: str | None = Cookie(default=None)):
+        _require_csrf(request, dockbench_csrf)
         try:
             return (await run_in_threadpool(ws().reset_vnc_password, body.password)).public()
         except Exception as exc:
             return safe_error(exc)
 
     @app.post("/api/containers/{name}/desktop/sessions")
-    async def create_container_desktop_session(name: str, body: SessionRequest, request: Request, workbench_csrf: str | None = Cookie(default=None)):
-        _require_csrf(request, workbench_csrf)
+    async def create_container_desktop_session(name: str, body: SessionRequest, request: Request, dockbench_csrf: str | None = Cookie(default=None)):
+        _require_csrf(request, dockbench_csrf)
         try:
             endpoint = await _fleet_call("ensure_desktop", name, body.password)
             session_id = await app.state.sessions.create(endpoint.port, name)
@@ -716,16 +716,16 @@ def create_app(workstation: Workstation | None = None, fleet: Any | None = None,
             return safe_error(exc)
 
     @app.post("/api/containers/{name}/desktop/password")
-    async def reset_container_desktop_password(name: str, body: PasswordResetRequest, request: Request, workbench_csrf: str | None = Cookie(default=None)):
-        _require_csrf(request, workbench_csrf)
+    async def reset_container_desktop_password(name: str, body: PasswordResetRequest, request: Request, dockbench_csrf: str | None = Cookie(default=None)):
+        _require_csrf(request, dockbench_csrf)
         try:
             return container_public(await _fleet_call("reset_vnc_password", name, body.password))
         except Exception as exc:
             return safe_error(exc)
 
     @app.post("/api/containers/{name}/terminals")
-    async def create_terminal(name: str, request: Request, workbench_csrf: str | None = Cookie(default=None)):
-        _require_csrf(request, workbench_csrf)
+    async def create_terminal(name: str, request: Request, dockbench_csrf: str | None = Cookie(default=None)):
+        _require_csrf(request, dockbench_csrf)
         try:
             status = await _fleet_call("container", name)
             if status.state != "running":
@@ -916,7 +916,7 @@ def create_app(workstation: Workstation | None = None, fleet: Any | None = None,
     else:
         @app.get("/")
         async def unavailable_frontend():
-            return JSONResponse(status_code=503, content={"code": "frontend_not_built", "message": "Build the Workbench frontend with npm run build."})
+            return JSONResponse(status_code=503, content={"code": "frontend_not_built", "message": "Build the Dockbench frontend with npm run build."})
     return app
 
 

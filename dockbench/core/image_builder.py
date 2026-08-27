@@ -4,7 +4,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Callable, Protocol
 
-from docker_ws.core.recipes import ImageRecipe, RecipeCatalog, RecipeError, UNSET, _Unset, resolve_manifest_overrides
+from dockbench.core.recipes import ImageRecipe, RecipeCatalog, RecipeError, UNSET, _Unset, resolve_manifest_overrides
 
 
 class DockerRunner(Protocol):

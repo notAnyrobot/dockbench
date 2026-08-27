@@ -4,77 +4,77 @@ from pathlib import Path
 
 import pytest
 
-from docker_ws.core.workbench_deployment import (
+from dockbench.core.server_deployment import (
     DeploymentError,
     DeploymentOptions,
-    WorkbenchDeployment,
-    WorkbenchServiceStatus,
+    ServerDeployment,
+    ServerStatus,
     load_runtime_config,
 )
 
 
-def _deployment(tmp_path: Path) -> WorkbenchDeployment:
+def _deployment(tmp_path: Path) -> ServerDeployment:
     root = tmp_path / "repo"
     (root / "apps/workbench").mkdir(parents=True)
     (root / "assets/systemd").mkdir(parents=True)
-    (root / "assets/systemd/docker-ws-workbench.service").write_text(
-        "ExecStart=__UV_EXECUTABLE__ run --project __WORKBENCH_ROOT__ docker-ws workbench serve --port __WORKBENCH_PORT__ --config __WORKBENCH_CONFIG__\nEnvironmentFile=__WORKBENCH_ENV_FILE__\n"
+    (root / "assets/systemd/dockbench.service").write_text(
+        "ExecStart=__UV_EXECUTABLE__ run --project __SERVER_ROOT__ dockbench serve --port __SERVER_PORT__ --config __SERVER_CONFIG__\nEnvironmentFile=__SERVER_ENV_FILE__\n"
     )
-    return WorkbenchDeployment(DeploymentOptions(root, config_home=tmp_path / "config", state_home=tmp_path / "state"))
+    return ServerDeployment(DeploymentOptions(root, config_home=tmp_path / "config", state_home=tmp_path / "state"))
 
 
 def test_runtime_config_is_allowlisted_and_never_persists_vnc_password(tmp_path, monkeypatch):
     deployment = _deployment(tmp_path)
-    monkeypatch.setenv("ROBOTICS_WS_WORKSPACE", "/cluster/workspace")
-    monkeypatch.setenv("ROBOTICS_WS_VNC_PASSWORD", "do-not-save")
+    monkeypatch.setenv("DOCKBENCH_WORKSPACE", "/cluster/workspace")
+    monkeypatch.setenv("DOCKBENCH_VNC_PASSWORD", "do-not-save")
     monkeypatch.setenv("UNRELATED", "also-do-not-save")
     values = deployment._write_runtime_config()
 
     persisted = json.loads(deployment.config_path.read_text())
-    assert values == {"ROBOTICS_WS_WORKSPACE": "/cluster/workspace"}
+    assert values == {"DOCKBENCH_WORKSPACE": "/cluster/workspace"}
     assert persisted["environment"] == values
-    assert "VNC_PASSWORD" not in deployment.environment_path.read_text()
+    assert "DOCKBENCH_VNC_PASSWORD" not in deployment.environment_path.read_text()
     assert "UNRELATED" not in deployment.config_path.read_text()
     assert load_runtime_config(deployment.config_path) == values
     assert deployment.config_path.stat().st_mode & 0o777 == 0o600
 
 
-def test_runtime_config_loads_legacy_code_root_for_existing_deployments(tmp_path):
+def test_runtime_config_rejects_legacy_environment_names(tmp_path):
     config = tmp_path / "config.json"
     config.write_text(json.dumps({"environment": {"ROBOTICS_WS_CODE_ROOT": "/legacy/Code"}}))
 
-    assert load_runtime_config(config) == {"ROBOTICS_WS_CODE_ROOT": "/legacy/Code"}
+    assert load_runtime_config(config) == {}
 
 
-def test_new_deployment_migrates_legacy_code_root_to_workspace(tmp_path, monkeypatch):
+def test_new_deployment_ignores_legacy_code_root(tmp_path, monkeypatch):
     deployment = _deployment(tmp_path)
     monkeypatch.setenv("ROBOTICS_WS_CODE_ROOT", "/legacy/Code")
 
-    assert deployment._snapshot_environment() == {"ROBOTICS_WS_WORKSPACE": "/legacy/Code"}
+    assert deployment._snapshot_environment()["DOCKBENCH_WORKSPACE"] != "/legacy/Code"
 
 
 def test_runtime_config_rejects_arbitrary_environment_keys(tmp_path):
     config = tmp_path / "config.json"
-    config.write_text(json.dumps({"environment": {"PATH": "/evil", "ROBOTICS_WS_DOCKER": "docker"}}))
-    assert load_runtime_config(config) == {"ROBOTICS_WS_DOCKER": "docker"}
+    config.write_text(json.dumps({"environment": {"PATH": "/evil", "DOCKBENCH_DOCKER": "docker"}}))
+    assert load_runtime_config(config) == {"DOCKBENCH_DOCKER": "docker"}
     config.write_text("[]")
-    with pytest.raises(DeploymentError, match="invalid Workbench runtime config"):
+    with pytest.raises(DeploymentError, match="invalid Dockbench runtime config"):
         load_runtime_config(config)
 
 
 def test_systemd_probe_falls_back_only_when_user_bus_is_unavailable(monkeypatch):
     monkeypatch.setattr(subprocess, "run", lambda *args, **kwargs: subprocess.CompletedProcess(args[0], 1, "", "Failed to connect to bus: No medium found"))
-    assert WorkbenchDeployment._systemd_probe() == "unavailable"
+    assert ServerDeployment._systemd_probe() == "unavailable"
     monkeypatch.setattr(subprocess, "run", lambda *args, **kwargs: subprocess.CompletedProcess(args[0], 1, "", "unit manager corrupted"))
     with pytest.raises(DeploymentError, match="available but unhealthy"):
-        WorkbenchDeployment._systemd_probe()
+        ServerDeployment._systemd_probe()
 
 
 def test_deploy_builds_before_install_and_systemd_unit_uses_serve(tmp_path, monkeypatch):
     deployment = _deployment(tmp_path)
     workspace = tmp_path / "workspace"
     workspace.mkdir()
-    monkeypatch.setenv("ROBOTICS_WS_WORKSPACE", str(workspace))
+    monkeypatch.setenv("DOCKBENCH_WORKSPACE", str(workspace))
     commands = []
 
     monkeypatch.setattr(deployment, "_require_build_tools", lambda: ("/bin/uv", "/bin/npm"))
@@ -90,14 +90,14 @@ def test_deploy_builds_before_install_and_systemd_unit_uses_serve(tmp_path, monk
         (["/bin/npm", "run", "build"], deployment.options.repository_root / "apps/workbench"),
     ]
     unit = result.unit_path.read_text()
-    assert "docker-ws workbench serve --port 8787 --config" in unit
-    assert "__WORKBENCH_" not in unit
+    assert "dockbench serve --port 8787 --config" in unit
+    assert "__SERVER_" not in unit
     assert result.manager == "systemd"
 
 
 def test_deploy_rejects_missing_workspace_before_build(tmp_path, monkeypatch):
     deployment = _deployment(tmp_path)
-    monkeypatch.setenv("ROBOTICS_WS_WORKSPACE", str(tmp_path / "missing"))
+    monkeypatch.setenv("DOCKBENCH_WORKSPACE", str(tmp_path / "missing"))
     monkeypatch.setattr(deployment, "_require_build_tools", lambda: pytest.fail("build preflight should not run"))
 
     with pytest.raises(DeploymentError, match=r"workspace does not exist: .*--workspace PATH"):
@@ -105,7 +105,7 @@ def test_deploy_rejects_missing_workspace_before_build(tmp_path, monkeypatch):
 
 
 def test_systemd_unit_treats_uv_sigterm_exit_as_clean():
-    unit = (Path(__file__).parents[2] / "assets/systemd/docker-ws-workbench.service").read_text()
+    unit = (Path(__file__).parents[2] / "assets/systemd/dockbench.service").read_text()
     assert "SuccessExitStatus=143" in unit
 
 
@@ -114,7 +114,7 @@ def test_start_starts_an_existing_systemd_deployment_without_rebuilding(tmp_path
     deployment._mkdir_private(deployment.unit_path.parent)
     deployment.unit_path.write_text("[Service]\n")
     commands = []
-    expected = WorkbenchServiceStatus("systemd", "running", "active", deployment.url)
+    expected = ServerStatus("systemd", "running", "active", deployment.url)
 
     monkeypatch.setattr(deployment, "_systemd_probe", lambda: "available")
     monkeypatch.setattr(deployment, "_command", lambda args, *, cwd: commands.append((args, cwd)))
@@ -122,7 +122,7 @@ def test_start_starts_an_existing_systemd_deployment_without_rebuilding(tmp_path
 
     assert deployment.start() == expected
     assert commands == [
-        (["systemctl", "--user", "start", "docker-ws-workbench.service"], deployment.options.repository_root)
+        (["systemctl", "--user", "start", "dockbench.service"], deployment.options.repository_root)
     ]
 
 
@@ -130,7 +130,7 @@ def test_start_requires_an_existing_systemd_deployment(tmp_path, monkeypatch):
     deployment = _deployment(tmp_path)
     monkeypatch.setattr(deployment, "_systemd_probe", lambda: "available")
 
-    with pytest.raises(DeploymentError, match="workbench deploy"):
+    with pytest.raises(DeploymentError, match="dockbench deploy"):
         deployment.start()
 
 
@@ -157,17 +157,17 @@ def test_fallback_replaces_old_process_persists_metadata_and_status(tmp_path, mo
 
 def test_health_timeout_includes_relevant_diagnostic(tmp_path, monkeypatch):
     deployment = _deployment(tmp_path)
-    deployment = WorkbenchDeployment(DeploymentOptions(deployment.options.repository_root, config_home=tmp_path / "config", state_home=tmp_path / "state", health_timeout_seconds=0))
+    deployment = ServerDeployment(DeploymentOptions(deployment.options.repository_root, config_home=tmp_path / "config", state_home=tmp_path / "state", health_timeout_seconds=0))
     with pytest.raises(DeploymentError, match="journalctl"):
         deployment._wait_for_health(type("Result", (), {"manager": "systemd"})())
 
 
 def test_status_uses_saved_custom_port_after_a_new_cli_invocation(tmp_path, monkeypatch):
     deployed = _deployment(tmp_path)
-    deployed = WorkbenchDeployment(DeploymentOptions(deployed.options.repository_root, port=9123, config_home=tmp_path / "config", state_home=tmp_path / "state"))
+    deployed = ServerDeployment(DeploymentOptions(deployed.options.repository_root, port=9123, config_home=tmp_path / "config", state_home=tmp_path / "state"))
     deployed._mkdir_private(deployed.state_dir)
     deployed._write_private(deployed.metadata_path, json.dumps(deployed._installation_metadata("systemd")))
-    later = WorkbenchDeployment(DeploymentOptions(deployed.options.repository_root, config_home=tmp_path / "config", state_home=tmp_path / "state"))
+    later = ServerDeployment(DeploymentOptions(deployed.options.repository_root, config_home=tmp_path / "config", state_home=tmp_path / "state"))
     monkeypatch.setattr(later, "_systemd_probe", lambda: "available")
     monkeypatch.setattr(subprocess, "run", lambda *args, **kwargs: subprocess.CompletedProcess(args[0], 0, "active\n", ""))
     assert later.status().url == "http://127.0.0.1:9123"
@@ -177,7 +177,7 @@ def test_fallback_health_failure_stops_process_and_removes_metadata(tmp_path, mo
     deployment = _deployment(tmp_path)
     workspace = tmp_path / "workspace"
     workspace.mkdir()
-    monkeypatch.setenv("ROBOTICS_WS_WORKSPACE", str(workspace))
+    monkeypatch.setenv("DOCKBENCH_WORKSPACE", str(workspace))
     deployment._mkdir_private(deployment.state_dir)
     metadata = deployment._installation_metadata("process", 77)
     metadata["process_identity"] = 2

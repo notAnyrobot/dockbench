@@ -1,12 +1,12 @@
 [Unit]
-Description=Docker Workstation Workbench
+Description=Dockbench server
 After=default.target
 
 [Service]
 Type=simple
-WorkingDirectory=__WORKBENCH_ROOT__
-EnvironmentFile=__WORKBENCH_ENV_FILE__
-ExecStart=__UV_EXECUTABLE__ run --frozen --project __WORKBENCH_ROOT__ docker-ws workbench serve --port __WORKBENCH_PORT__ --config __WORKBENCH_CONFIG__
+WorkingDirectory=__SERVER_ROOT__
+EnvironmentFile=__SERVER_ENV_FILE__
+ExecStart=__UV_EXECUTABLE__ run --frozen --project __SERVER_ROOT__ dockbench serve --port __SERVER_PORT__ --config __SERVER_CONFIG__
 # uv forwards systemd's SIGTERM to the server and then exits with 128 + SIGTERM.
 # The server has already completed its graceful shutdown, so 143 is successful.
 SuccessExitStatus=143

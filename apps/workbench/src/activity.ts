@@ -1,9 +1,9 @@
 export type ActivityLevel = "info" | "success" | "warning" | "error";
 export type ActivityEntry = { id: string; time: string; level: ActivityLevel; message: string };
 
-const ACTIVITY_KEY = "docker-ws.workbench.activity";
-const INSPECTOR_KEY = "docker-ws.workbench.inspector-width";
-const DOCK_KEY = "docker-ws.workbench.dock-height";
+const ACTIVITY_KEY = "dockbench.activity";
+const INSPECTOR_KEY = "dockbench.inspector-width";
+const DOCK_KEY = "dockbench.dock-height";
 const MAX_ACTIVITY = 120;
 
 export function loadActivity(storage: Pick<Storage, "getItem"> = localStorage): ActivityEntry[] {

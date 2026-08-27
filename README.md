@@ -1,173 +1,165 @@
-# Docker Workstation
+# Dockbench
 
-Managed Docker image recipes and a generic local-image workstation launcher.
-The bundled recipe at `assets/images/android-ws` has a CUDA `core` target and a
-`desktop` target that adds XFCE, TigerVNC, and Firefox. Host lifecycle code is
-the installable `docker_ws` Python package; `apps/workbench` is the browser UI.
-Projects, environments, data, and credentials remain on host mounts; this
-repository deliberately contains no project checkout or credential material.
+Dockbench is a browser workbench and companion CLI for building managed Docker
+workstation images and running GPU-enabled development containers on local or
+remote Docker hosts. The installable Python package is `dockbench`; the browser
+client lives in `apps/workbench`.
+
+The bundled `assets/images/android-ws` recipe provides a CUDA `core` target and
+a `desktop` target with XFCE, TigerVNC, and Firefox. Projects, environments,
+data, and credentials remain on host mounts; this repository deliberately
+contains no project checkout or credential material.
 
 Recipe revision 2 pulls its CUDA base directly from NVIDIA NGC
 (`nvcr.io/nvidia/cuda`) and uses BuildKit's bundled Dockerfile frontend, so the
-recipe no longer depends on Docker Hub. Other build steps still require their
+recipe does not depend on Docker Hub. Other build steps still require their
 documented upstream package and source hosts.
 
-The bundled desktop image is optional: `docker-ws` launches any tagged local
-image that provides `/bin/sh` and `sleep`. The managed container name and
-hostname default to `docker-ws`. Existing `ROBOTICS_WS_*` configuration
-variables and `.robotics-ws` state paths remain supported.
+## Build and run
 
-## Build and verify
-
-Run the inexpensive structural checks from the repository root:
+Run the repository checks:
 
 ```bash
 bash tests/check-context.sh
 ```
 
-On a native Ubuntu `linux/amd64` host with NVIDIA Container Toolkit, build the
-desktop image. Docker reuses unchanged layers and rebuilds layers affected by
-Dockerfile edits:
+On a native Ubuntu `linux/amd64` host with NVIDIA Container Toolkit, build and
+verify the desktop image:
 
 ```bash
-uv run docker-ws image build
+uv run dockbench image build
+uv run dockbench image verify android-ws:u22.04-cu12.8-v2
 ```
 
-The same recipe can be built directly without `docker-ws`:
+Use `--no-cache` for a cache-free build. `image rebuild` builds the selected
+recipe, replaces the default managed container, and starts it again:
 
 ```bash
-docker buildx build --platform linux/amd64 \
-  --file assets/images/android-ws/Dockerfile.android-ws-v2 \
-  --target desktop --load --tag android-ws:u22.04-cu12.8-v2 \
-  assets/images/android-ws
+uv run dockbench image rebuild
 ```
 
-Use `--no-cache` for a cache-free build. Verification is explicit and checks
-the generic shell contract plus the desktop-v1 contract when the image
-advertises it:
+The replacement retains the host-mounted `/workspace` projects and `.dockbench`
+state, but discards changes made only in the old container filesystem.
+
+Use Docker directly for general inventory:
 
 ```bash
-uv run docker-ws image build --no-cache
-uv run docker-ws image verify android-ws:u22.04-cu12.8-v2
+docker image ls
+nvidia-smi
 ```
 
-Image builds use BuildKit's plain progress format. The CLI streams each line
-to the terminal immediately; Workbench shows the same sanitized progress in
-the live image job and retains a bounded recent log for long-running builds.
-
-`image build` leaves an existing container untouched. To build the image and
-replace the existing container so it immediately uses that image, run
-`uv run docker-ws image rebuild`. The replacement container keeps the host-mounted
-`/workspace` projects and `.robotics-ws` state, but changes made only in the old
-container filesystem are discarded.
-
-Inspect tagged local images and GPUs, then start a persistent workstation:
+Manage the default `dockbench` container directly from the top-level CLI:
 
 ```bash
-uv run docker-ws image list
-uv run docker-ws image recipe list
-uv run docker-ws gpus
-uv run docker-ws container start
-uv run docker-ws container start --image ubuntu:24.04 --gpu none
-uv run docker-ws container start --image YOUR_IMAGE --gpu 0 --gpu GPU-UUID
-uv run docker-ws container enter
+uv run dockbench start
+uv run dockbench start --image ubuntu:24.04 --gpu none
+uv run dockbench start --image YOUR_IMAGE --gpu 0 --gpu GPU-UUID
+uv run dockbench shell
+uv run dockbench desktop
+uv run dockbench status
+uv run dockbench stop
 ```
 
-The default launch uses `android-ws:u22.04-cu12.8-v2` and all reported
-GPUs. Use `--gpu none` for CPU-only operation, or repeat `--gpu` to select a
-specific subset. A running managed container is immutable: changing its image or GPUs
-requires `--replace`, which retains `/workspace` and `/state` but discards
-changes made only in the old container filesystem. Containers are explicitly
-created as root, so files created in `/workspace` may become root-owned on the host.
-Stopping a container terminates all processes inside it. Starting it again
-resumes that same container and writable filesystem; it does not create a fresh
-container. Use remove/create or an explicit replacement when a fresh container
-is required.
+The default launch uses `android-ws:u22.04-cu12.8-v2` and all reported GPUs.
+Use `--gpu none` for CPU-only operation, or repeat `--gpu` to select a subset.
+A running managed container is immutable: changing image or GPU selection
+requires `--replace`, which retains `/workspace` and `/state` but discards its
+container filesystem. Containers run as root, so files created in `/workspace`
+may become root-owned on the host.
 
-By default, `docker-ws` mounts the host's `~/workspace` at `/workspace`. On HPC
-or workstation hosts with `/data/$USER`, it instead uses
-`/data/$USER/workspace`. Set `ROBOTICS_WS_WORKSPACE` to mount a different host
-directory; existing `ROBOTICS_WS_CODE_ROOT` configurations remain compatible.
-The selected workspace must exist before deploying or starting a container.
-`start` does not configure or run VNC, so it works for shell-only use without a
-VNC password. `vnc` provisions a password when needed, starts VNC, and opens
-the viewer. Run
-`uv run docker-ws --help` for all operations. Set `ROBOTICS_WS_VNC_PASSWORD` only in the environment
-when provisioning a password—never store it in this repository.
+By default, Dockbench mounts the host `~/workspace` at `/workspace`. On hosts
+with `/data/$USER`, it instead uses `/data/$USER/workspace`. Set
+`DOCKBENCH_WORKSPACE` to choose another existing host directory.
+`DOCKBENCH_VNC_PASSWORD` is used only while provisioning a VNC password; never
+store it in this repository. The desktop image advertises desktop contract
+`v1`; shell-only images can still be used with `dockbench shell`.
 
-The bundled image advertises desktop contract `v1`, enabling VNC and Workbench
-desktop controls. VNC configuration and startup are managed by `docker-ws` core
-code rather than an image-provided helper. Shell-only images never have VNC installed or started; use
-`docker-ws container enter` instead. The generic launcher runs root to avoid requiring
-user-management tools in arbitrary images.
+Image archives use the standard Docker format:
 
 ```bash
-sudo apt update
-sudo apt install PACKAGE
-sudo -i
+uv run dockbench image export ./image-archives
+uv run dockbench image import ./image-archives/android-ws.tar
 ```
 
-Packages installed interactively modify only the current container. Add
-permanent packages as a new revision of the relevant image recipe and rebuild.
+## Image recipes
 
-### Image recipes
+Recipes are repository-owned files under `assets/images/<recipe-id>/`. Dockbench
+does not provide recipe-management commands in its CLI. To add or update one,
+edit the repository directly:
 
-Each recipe is stored at `assets/images/RECIPE_ID`. Its `recipe.json` records
-the current revision, Dockerfile name, default tag, target, and platform. A
-Dockerfile revision is named `Dockerfile.RECIPE_ID-vREVISION`; previous
-revisions remain in the directory when a new one is added.
+```text
+assets/images/<recipe-id>/
+├── recipe.json
+└── Dockerfile.<recipe-id>-v<revision>
+```
 
-Register and build a Dockerfile from the CLI:
+`recipe.json` declares the active revision, Dockerfile name, default tag,
+target, and platform. Recipe IDs use lowercase kebab-case. A revision is a new
+versioned Dockerfile plus an updated manifest; previous versioned Dockerfiles
+remain in the directory. The directory is the Docker build context, so maintain
+any companion build files there as well. Build a repository recipe with:
 
 ```bash
-uv run docker-ws image recipe add my-workstation ./Dockerfile \
-  --tag my-workstation:v1 --target desktop --platform linux/amd64
-uv run docker-ws image build my-workstation
-uv run docker-ws image recipe revise my-workstation ./Dockerfile.v2 \
-  --tag my-workstation:v2
+uv run dockbench image build <recipe-id>
 ```
 
-Recipe IDs are lowercase kebab-case. Adding an existing ID is rejected; use
-`recipe revise` to add the next version. The recipe directory is the Docker
-build context. Workbench uploads one UTF-8 Dockerfile per revision in this
-version, so companion context files must be maintained directly in the recipe
-directory. Recipe changes made through Workbench are uncommitted files in this
-repository and require the checkout to be writable.
+The browser app retains its optional recipe create/revise workflow for a
+writable checkout, but direct file editing is the canonical repository workflow.
+`RecipeCatalog` remains the internal validator used by both the CLI and browser
+build flows.
 
-To transfer built images, use `uv run docker-ws image package [DIRECTORY]` or
-`uv run docker-ws image load TARFILE [TARFILE ...]`.
-
-## Workbench
-
-Workbench is a desktop-first, single-user browser companion for the same
-`docker-ws` fleet. It lists managed containers, local images, and available
-GPUs, manages Dockerfile recipe revisions, builds and explicitly verifies
-images, and can create containers from a selected image and GPU allocation. Its
-inspector and lower Activity/Root Bash dock are resizable; layout and Activity
-history persist in the browser.
-
-### Remote host deployment
+## Browser workbench on a remote host
 
 On a new Linux HPC or workstation host, clone this repository and bootstrap the
-user-scoped tooling from its checkout:
+user-scoped tooling:
 
 ```bash
 ./scripts/bootstrap.sh
 ```
 
-When missing, the bootstrap installs pinned `uv` and `nvm` releases without
-`sudo`, then uses `nvm` to install Node 22 and npm. It does not install Docker
-because rootful vs. rootless Docker is a host policy decision; instead, it
-verifies that the current user can reach an existing Docker daemon. Non-Python
-command prerequisites are listed in [`dependencies.txt`](dependencies.txt);
-Python and Python-package dependencies remain exclusively managed by `uv`
-through `pyproject.toml` and `uv.lock`.
+When needed, bootstrap installs pinned `uv` and `nvm` releases without `sudo`,
+then uses `nvm` to install Node 22 and npm. It does not install Docker; Docker
+daemon policy is host-specific. See [`dependencies.txt`](dependencies.txt) for
+required host commands.
 
-#### Rootless Docker with NVIDIA GPUs
+Deploy the loopback-only Dockbench server on the Docker host:
 
-NVIDIA GPU containers require an additional one-time setup when Docker runs in
-rootless mode. First, the Docker user registers the NVIDIA runtime with their
-own daemon and restarts that daemon:
+```bash
+uv run dockbench deploy
+```
+
+Deployment installs locked Python and frontend dependencies, builds the browser
+client, starts the server, and waits for its health check. It does not build an
+image or recreate a container. Manage an already deployed server with:
+
+```bash
+uv run dockbench server start
+uv run dockbench server status
+uv run dockbench server stop
+```
+
+For foreground development or direct local use, run:
+
+```bash
+uv run dockbench serve
+```
+
+On a local machine, create an SSH tunnel to the remote browser server:
+
+```bash
+uv run dockbench connect USER@HPC_HOST
+uv run dockbench connect research-hpc --local-port 9878 --remote-port 8787
+uv run dockbench connect research-hpc --open-browser
+```
+
+Open the printed `127.0.0.1` URL and keep the tunnel command running while
+using Dockbench. The server binds only to `127.0.0.1` on the remote host; it is
+not exposed to the network.
+
+### Rootless Docker with NVIDIA GPUs
+
+Rootless Docker requires one additional NVIDIA Container Toolkit setup. The
+Docker user configures the runtime for their own daemon, then restarts it:
 
 ```bash
 nvidia-ctk runtime configure \
@@ -176,107 +168,26 @@ nvidia-ctk runtime configure \
 systemctl --user restart docker
 ```
 
-An administrator must then configure NVIDIA Container Toolkit not to modify
-cgroup device rules, because a rootless daemon does not have permission to
-perform those operations:
+An administrator must configure NVIDIA Container Toolkit not to modify cgroup
+device rules, because a rootless daemon cannot perform those operations:
 
 ```bash
 sudo nvidia-ctk config \
   --set nvidia-container-cli.no-cgroups \
   --in-place
-grep -n 'no-cgroups' /etc/nvidia-container-runtime/config.toml
 ```
 
-The expected setting is `no-cgroups = true`. This file is host-global, so
-coordinate the change with the host administrator on a shared machine:
-rootful NVIDIA workloads can require different cgroup handling. The setting
-does not disable Docker's CPU or memory cgroups, but it does disable NVIDIA
-Toolkit's cgroup device-rule enforcement. Workbench GPU reservations coordinate
-only containers managed by that Workbench instance; they do not provide
-exclusive allocation across users or independent Docker daemons.
-
-Restart the rootless Docker daemon after either configuration changes and
-verify GPU injection before deploying workloads:
+Coordinate this host-global setting with the host administrator. Verify GPU
+injection before deploying workloads:
 
 ```bash
-systemctl --user restart docker
 docker run --rm --gpus all nvcr.io/nvidia/cuda:12.8.1-base-ubuntu22.04 nvidia-smi
 ```
 
-See NVIDIA's
-[rootless Docker installation instructions](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/install-guide.html#rootless-mode)
-for the authoritative host setup.
+See NVIDIA's [rootless Docker installation instructions](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/install-guide.html).
 
-Then build and deploy Workbench with:
-
-```bash
-uv run docker-ws workbench deploy
-```
-
-Deploy requires `uv`, Node/npm, Docker, and a writable repository checkout. It
-installs the locked Python and frontend dependencies, builds the browser client,
-starts a loopback-only server, and waits for its health check. Image builds stay
-explicit: deploy does not build `android-ws` or recreate containers.
-
-`workbench deploy` prefers a user-level systemd service and is safe to repeat
-after updating the checkout. If user systemd is unavailable, it runs a managed
-detached process instead. The fallback may be terminated by HPC systems when
-your login session ends; user systemd is the durable option. After deployment,
-use `uv run docker-ws workbench start` to start the user service without
-rebuilding, `uv run docker-ws workbench status` to inspect the service/process,
-and `uv run docker-ws workbench stop` to stop it. A host without user systemd
-must rerun `deploy` to start its managed fallback process. Deployment
-configuration is kept under the XDG configuration directory and its logs are
-reported by the status and deployment commands. `ROBOTICS_WS_VNC_PASSWORD` is
-intentionally never persisted there. On systems using user systemd, enable
-linger when the service must survive logout:
-
-```bash
-loginctl enable-linger "$USER"
-```
-
-The Workbench server always binds to `127.0.0.1` on the remote host; it is not
-exposed to the network and no public authentication surface is added.
-
-### Local browser connection
-
-On the local machine, where Docker is not required, use the same CLI to create
-the SSH tunnel and wait for Workbench readiness:
-
-```bash
-uv run docker-ws workbench connect USER@HPC_HOST
-```
-
-Open the printed `127.0.0.1` URL in your local browser. Keep this command
-running while using Workbench; press Ctrl+C to close the tunnel. `connect` uses
-your normal SSH configuration, so aliases, identity
-files, nonstandard ports, and bastion hosts via `ProxyJump` work unchanged. For
-example:
-
-```bash
-uv run docker-ws workbench connect research-hpc
-uv run docker-ws workbench connect research-hpc --local-port 9878 --remote-port 8787
-uv run docker-ws workbench connect research-hpc --open-browser
-```
-
-When the default local port is occupied, `connect` selects a free local port;
-an explicitly requested busy `--local-port` fails instead. The browser is not
-opened automatically; `--open-browser` opts into that behavior. `workbench
-serve` remains available for foreground development or direct use on the Docker host. The legacy
-`service install` command remains a compatibility alias for deployment.
-
-### Remote acceptance flow
-
-1. On the remote Docker host, run `uv run docker-ws workbench deploy`.
-2. On the local machine, run `uv run docker-ws workbench connect USER@HPC_HOST`.
-3. In Workbench, build and explicitly verify `android-ws`.
-4. Create a managed remote container from the verified image, then open its
-   Root Bash terminal or desktop from the same local browser session.
-
-The VNC password is sent directly to noVNC for the current connection, is not
-saved by the browser or Workbench, and is never returned by its API. The first
-connection provisions the password if the container has none. Historical UX
-and planning inputs remain in [`docs/workbench/archive/`](docs/workbench/archive/).
+Historical UX and planning inputs remain in
+[`docs/workbench/archive/`](docs/workbench/archive/).
 
 ## Provenance
 

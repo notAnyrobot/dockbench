@@ -8,18 +8,17 @@ trap 'rm -rf "$temporary_dir"' EXIT
 fake_docker="$PWD/tests/helpers/fake-docker"
 fake_vncviewer="$PWD/tests/helpers/fake-vncviewer"
 code_root="$temporary_dir/Code"
-state_root="$temporary_dir/.robotics-ws"
+state_root="$temporary_dir/.dockbench"
 vnc_password_file="$state_root/home/.vnc/passwd"
 mkdir -p "$code_root"
-launch_config="$code_root|$state_root|8g|1234|5678|rootful|5901"
 
 run_ws() {
   FAKE_DOCKER_LOG="$temporary_dir/docker.log" FAKE_DOCKER_STATE="$temporary_dir/docker.state" \
-  FAKE_LAUNCH_CONFIG="$launch_config" FAKE_VNC_PASSWORD="$vnc_password_file" \
-  FAKE_VNC_RUNNING="$temporary_dir/vnc-running" ROBOTICS_WS_DOCKER="$fake_docker" \
-  ROBOTICS_WS_WORKSPACE="$code_root" ROBOTICS_WS_STATE_ROOT="$state_root" \
-  ROBOTICS_WS_SHM_SIZE=8g ROBOTICS_WS_HOST_UID=1234 ROBOTICS_WS_HOST_GID=5678 \
-  ROBOTICS_WS_HOST_USER=test-user uv run --no-sync docker-ws "$@"
+  FAKE_LAUNCH_SPEC="$temporary_dir/launch-spec" FAKE_VNC_PASSWORD="$vnc_password_file" \
+  FAKE_VNC_RUNNING="$temporary_dir/vnc-running" DOCKBENCH_DOCKER="$fake_docker" \
+  DOCKBENCH_WORKSPACE="$code_root" DOCKBENCH_STATE_ROOT="$state_root" \
+  DOCKBENCH_SHM_SIZE=8g DOCKBENCH_HOST_UID=1234 DOCKBENCH_HOST_GID=5678 \
+  DOCKBENCH_HOST_USER=test-user uv run --no-sync dockbench "$@"
 }
 
 : >"$temporary_dir/docker.log"
@@ -30,28 +29,28 @@ grep -F -- '/assets/images/android-ws/Dockerfile.android-ws-v2|' "$temporary_dir
 grep -F -- '|--target|desktop|--load|--tag|android-ws:u22.04-cu12.8-v2|' "$temporary_dir/docker.log" >/dev/null
 
 : >"$temporary_dir/docker.log"
-run_ws container status >"$temporary_dir/output"
-grep -Fx 'docker-ws: absent' "$temporary_dir/output" >/dev/null
+run_ws status >"$temporary_dir/output"
+grep -Fx 'dockbench: absent' "$temporary_dir/output" >/dev/null
 
 : >"$temporary_dir/docker.log"
-ROBOTICS_WS_DESKTOP_IMAGE=docker-ws:test-desktop ROBOTICS_WS_DESKTOP_NAME=test-workstation run_ws container start --gpu none >"$temporary_dir/output"
-grep -Fx 'test-workstation: running' "$temporary_dir/output" >/dev/null
-grep -F -- '|--name|test-workstation|' "$temporary_dir/docker.log" >/dev/null
+DOCKBENCH_IMAGE=dockbench:test-desktop DOCKBENCH_CONTAINER=test-container run_ws start --gpu none >"$temporary_dir/output"
+grep -Fx 'test-container: running' "$temporary_dir/output" >/dev/null
+grep -F -- '|--name|test-container|' "$temporary_dir/docker.log" >/dev/null
 grep -F -- '|--user|root|' "$temporary_dir/docker.log" >/dev/null
 grep -F -- "src=$code_root,dst=/workspace" "$temporary_dir/docker.log" >/dev/null
 grep -F -- "src=$state_root,dst=/state" "$temporary_dir/docker.log" >/dev/null
 ! test -e "$vnc_password_file"
 
 : >"$temporary_dir/docker.log"
-ROBOTICS_WS_DESKTOP_IMAGE=docker-ws:test-desktop ROBOTICS_WS_DESKTOP_NAME=test-workstation run_ws container enter
+DOCKBENCH_IMAGE=dockbench:test-desktop DOCKBENCH_CONTAINER=test-container run_ws shell
 grep -F '<|exec|-it|--user|1234:5678|--workdir|/workspace|' "$temporary_dir/docker.log" >/dev/null
 
-ROBOTICS_WS_DESKTOP_IMAGE=docker-ws:test-desktop ROBOTICS_WS_DESKTOP_NAME=test-workstation \
-  ROBOTICS_WS_VNC_PASSWORD=test-password ROBOTICS_WS_VNCVIEWER="$fake_vncviewer" run_ws container vnc
+DOCKBENCH_IMAGE=dockbench:test-desktop DOCKBENCH_CONTAINER=test-container \
+  DOCKBENCH_VNC_PASSWORD=test-password DOCKBENCH_VNC_VIEWER="$fake_vncviewer" run_ws desktop
 test -e "$vnc_password_file"
 test -e "$temporary_dir/vnc-running"
 
-ROBOTICS_WS_DESKTOP_NAME=test-workstation run_ws container stop >"$temporary_dir/output"
-grep -Fx 'test-workstation: stopped' "$temporary_dir/output" >/dev/null
-ROBOTICS_WS_DESKTOP_NAME=test-workstation run_ws container status >"$temporary_dir/output"
-grep -Fx 'test-workstation: stopped' "$temporary_dir/output" >/dev/null
+DOCKBENCH_CONTAINER=test-container run_ws stop >"$temporary_dir/output"
+grep -Fx 'test-container: stopped' "$temporary_dir/output" >/dev/null
+DOCKBENCH_CONTAINER=test-container run_ws status >"$temporary_dir/output"
+grep -Fx 'test-container: stopped' "$temporary_dir/output" >/dev/null

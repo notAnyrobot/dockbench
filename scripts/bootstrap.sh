@@ -5,10 +5,10 @@ script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 repository_root="$(cd -- "$script_dir/.." && pwd)"
 dependency_file="$repository_root/dependencies.txt"
 
-uv_version="${DOCKER_WS_UV_VERSION:-0.12.6}"
-nvm_version="${DOCKER_WS_NVM_VERSION:-v0.40.6}"
-node_version="${DOCKER_WS_NODE_VERSION:-22}"
-profile_file="${DOCKER_WS_PROFILE:-$HOME/.bashrc}"
+uv_version="${DOCKBENCH_UV_VERSION:-0.12.6}"
+nvm_version="${DOCKBENCH_NVM_VERSION:-v0.40.6}"
+node_version="${DOCKBENCH_NODE_VERSION:-22}"
+profile_file="${DOCKBENCH_PROFILE:-$HOME/.bashrc}"
 
 temporary_dir=""
 cleanup() {
@@ -106,9 +106,9 @@ main() {
   install_node
   check_external_host_tools
 
-  printf '\nDocker Workstation prerequisites are ready.\n'
+  printf '\nDockbench prerequisites are ready.\n'
   printf '  %s\n' "$(uv --version)" "node $(node --version)" "npm $(npm --version)" "docker available"
-  printf '\nDeploy Workbench with:\n  uv run docker-ws workbench deploy\n'
+  printf '\nDeploy Dockbench with:\n  uv run dockbench deploy\n'
   printf 'Open a new shell (or source %s) if uv or nvm is not yet on its PATH.\n' "$profile_file"
 }
 

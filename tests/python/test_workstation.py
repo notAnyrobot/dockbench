@@ -4,10 +4,10 @@ import threading
 
 import pytest
 
-from docker_ws.core.errors import DockerCommandError, WorkstationError, WorkstationReplaceRequired
-from docker_ws.core.defaults import DEFAULT_IMAGE
-from docker_ws.core.host_inventory import GPU, LocalImage
-from docker_ws.core.workstation import SubprocessDockerRunner, Workstation, WorkstationConfig
+from dockbench.core.errors import DockerCommandError, WorkstationError, WorkstationReplaceRequired
+from dockbench.core.defaults import DEFAULT_IMAGE
+from dockbench.core.host_inventory import GPU, LocalImage
+from dockbench.core.workstation import SubprocessDockerRunner, Workstation, WorkstationConfig
 
 
 class FakeInventory:
@@ -36,12 +36,12 @@ class FakeDocker:
         if on_output is not None: on_output("build progress")
         if args[:2] == ["container", "inspect"]:
             if not self.state: raise WorkstationError("not found")
-            if "docker-ws.launch-spec" in command: return self.launch_spec
+            if "io.github.notanyrobot.dockbench.launch-spec" in command: return self.launch_spec
             if "{{.Image}}" in args: return "sha256:image"
             return self.state
         if args[:2] == ["run", "-d"]:
             self.state = "running"
-            self.launch_spec = next((value.split("=", 1)[1] for value in args if value.startswith("docker-ws.launch-spec=")), "")
+            self.launch_spec = next((value.split("=", 1)[1] for value in args if value.startswith("io.github.notanyrobot.dockbench.launch-spec=")), "")
         if args[:1] == ["start"]: self.state = "running"
         if args[:1] == ["stop"]: self.state = "exited"
         if args[:1] == ["rm"]: self.state = ""
@@ -53,29 +53,42 @@ class FakeDocker:
 
 def config(tmp_path: Path, image=None):
     code = tmp_path / "Code"; code.mkdir()
-    return WorkstationConfig(tmp_path, "docker", code, tmp_path / ".robotics-ws", "8g", 1234, 5678, "robot", image, "robot-ws", 5901, "vncviewer", "rootful", 1234, 5678)
+    return WorkstationConfig(tmp_path, "docker", code, tmp_path / ".dockbench", "8g", 1234, 5678, "robot", image, "dockbench", 5901, "vncviewer", "rootful", 1234, 5678)
 
 
 @pytest.mark.parametrize(
     ("environment", "expected"),
-    [
-        ({"ROBOTICS_WS_WORKSPACE": "workspace", "ROBOTICS_WS_CODE_ROOT": "legacy"}, "workspace"),
-        ({"ROBOTICS_WS_CODE_ROOT": "legacy"}, "legacy"),
-    ],
+    [({"DOCKBENCH_WORKSPACE": "workspace"}, "workspace")],
 )
-def test_config_prefers_workspace_environment_and_accepts_legacy_code_root(tmp_path, monkeypatch, environment, expected):
+def test_config_uses_dockbench_workspace_environment_only(tmp_path, monkeypatch, environment, expected):
     for directory in {"workspace", "legacy"}:
         (tmp_path / directory).mkdir()
-    monkeypatch.delenv("ROBOTICS_WS_WORKSPACE", raising=False)
-    monkeypatch.delenv("ROBOTICS_WS_CODE_ROOT", raising=False)
+    monkeypatch.delenv("DOCKBENCH_WORKSPACE", raising=False)
+    monkeypatch.setenv("ROBOTICS_WS_CODE_ROOT", str(tmp_path / "legacy"))
     for name, value in environment.items():
         monkeypatch.setenv(name, str(tmp_path / value))
-    monkeypatch.setattr("docker_ws.core.workstation.shutil.which", lambda command: f"/usr/bin/{command}")
-    monkeypatch.setattr("docker_ws.core.workstation.SubprocessDockerRunner.run", lambda *args, **kwargs: "[]")
+    monkeypatch.setattr("dockbench.core.workstation.shutil.which", lambda command: f"/usr/bin/{command}")
+    monkeypatch.setattr("dockbench.core.workstation.SubprocessDockerRunner.run", lambda *args, **kwargs: "[]")
 
     result = WorkstationConfig.from_environment(tmp_path)
 
     assert result.workspace_root == tmp_path / expected
+    assert result.state_root == tmp_path / ".dockbench"
+    assert result.container_name == "dockbench"
+
+
+def test_config_ignores_the_former_workspace_environment(tmp_path, monkeypatch):
+    fallback = tmp_path / "fallback"
+    fallback.mkdir()
+    monkeypatch.delenv("DOCKBENCH_WORKSPACE", raising=False)
+    monkeypatch.setenv("ROBOTICS_WS_CODE_ROOT", str(tmp_path / "ignored"))
+    monkeypatch.setattr("dockbench.core.workstation.default_workspace", lambda: fallback)
+    monkeypatch.setattr("dockbench.core.workstation.shutil.which", lambda command: f"/usr/bin/{command}")
+    monkeypatch.setattr("dockbench.core.workstation.SubprocessDockerRunner.run", lambda *args, **kwargs: "[]")
+
+    result = WorkstationConfig.from_environment(tmp_path)
+
+    assert result.workspace_root == fallback
 
 
 def test_docker_runner_retains_daemon_stderr_for_sanitized_workbench_errors(monkeypatch):
@@ -85,7 +98,7 @@ def test_docker_runner_retains_daemon_stderr_for_sanitized_workbench_errors(monk
         calls.append((args, kwargs))
         return subprocess.CompletedProcess(args[0], 1, stderr="Error response from daemon: insufficient memory")
 
-    monkeypatch.setattr("docker_ws.core.workstation.subprocess.run", failed_run)
+    monkeypatch.setattr("dockbench.core.workstation.subprocess.run", failed_run)
 
     with pytest.raises(DockerCommandError, match="insufficient memory"):
         SubprocessDockerRunner("docker").run(["run", "example:image"])
@@ -153,7 +166,7 @@ def test_selected_gpu_is_persisted_by_uuid_and_replace_is_explicit(tmp_path):
     with pytest.raises(WorkstationReplaceRequired, match="--replace"):
         ws.start(image="test:image", all_gpus=False)
     ws.start(image="test:image", all_gpus=False, replace=True)
-    assert ["rm", "robot-ws"] in fake.commands
+    assert ["rm", "dockbench"] in fake.commands
 
 
 def test_multiple_selected_gpus_are_quoted_for_docker_csv_parsing(tmp_path):
@@ -177,10 +190,10 @@ def test_duplicate_gpu_is_rejected_before_container_creation(tmp_path):
     assert not any(command[:2] == ["run", "-d"] for command in fake.commands)
 
 
-def test_legacy_container_restarts_without_new_labels(tmp_path):
+def test_existing_default_container_restarts_without_replacement(tmp_path):
     fake = FakeDocker(config(tmp_path)); fake.state = "exited"; ws = Workstation(fake.config, fake, FakeInventory())
     assert ws.start().state == "running"
-    assert ["start", "robot-ws"] in fake.commands
+    assert ["start", "dockbench"] in fake.commands
 
 
 def test_shell_images_reject_desktop_without_running_vnc(tmp_path):

@@ -28,8 +28,8 @@ FAKE_NVM_LOG="$temporary_dir/nvm.log" HOME="$fake_home" PATH="$fake_bin:/usr/bin
 
 grep -F 'uv already installed: uv 0.12.6' "$temporary_dir/output" >/dev/null
 grep -F 'nvm already installed: 0.40.6' "$temporary_dir/output" >/dev/null
-grep -F 'Docker Workstation prerequisites are ready.' "$temporary_dir/output" >/dev/null
-grep -F 'uv run docker-ws workbench deploy' "$temporary_dir/output" >/dev/null
+grep -F 'Dockbench prerequisites are ready.' "$temporary_dir/output" >/dev/null
+grep -F 'uv run dockbench deploy' "$temporary_dir/output" >/dev/null
 grep -Fx 'install 22' "$temporary_dir/nvm.log" >/dev/null
 grep -Fx 'alias default 22' "$temporary_dir/nvm.log" >/dev/null
 grep -Fx 'use 22' "$temporary_dir/nvm.log" >/dev/null

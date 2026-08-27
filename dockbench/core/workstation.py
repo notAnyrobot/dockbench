@@ -16,9 +16,9 @@ from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 from typing import Callable, Iterable, Protocol
 
-from docker_ws.core.defaults import DEFAULT_IMAGE, default_workspace
-from docker_ws.core.errors import DockerCommandError, WorkstationError, WorkstationGPUConflict, WorkstationRebuildRequired, WorkstationReplaceRequired
-from docker_ws.core.host_inventory import HostInventory
+from dockbench.core.defaults import DEFAULT_IMAGE, default_workspace
+from dockbench.core.errors import DockerCommandError, WorkstationError, WorkstationGPUConflict, WorkstationRebuildRequired, WorkstationReplaceRequired
+from dockbench.core.host_inventory import HostInventory
 
 
 class DockerRunner(Protocol):
@@ -85,16 +85,16 @@ class WorkstationConfig:
     @classmethod
     def from_environment(cls, repository_root: Path | None = None) -> "WorkstationConfig":
         env = os.environ; root = repository_root or Path(__file__).resolve().parents[2]
-        workspace_value = env.get("ROBOTICS_WS_WORKSPACE") or env.get("ROBOTICS_WS_CODE_ROOT")
+        workspace_value = env.get("DOCKBENCH_WORKSPACE")
         workspace_root = Path(workspace_value).expanduser().resolve() if workspace_value else default_workspace()
-        state_root = Path(env.get("ROBOTICS_WS_STATE_ROOT", str(workspace_root.parent / ".robotics-ws"))).expanduser(); port = env.get("ROBOTICS_WS_VNC_PORT", "5901")
+        state_root = Path(env.get("DOCKBENCH_STATE_ROOT", str(workspace_root.parent / ".dockbench"))).expanduser(); port = env.get("DOCKBENCH_VNC_PORT", "5901")
         if not re.fullmatch(r"[1-9][0-9]*", port): raise WorkstationError(f"VNC port must be a positive integer: {port}")
-        docker = env.get("ROBOTICS_WS_DOCKER", "docker")
+        docker = env.get("DOCKBENCH_DOCKER", "docker")
         if shutil.which(docker) is None: raise WorkstationError(f"Docker command not found: {docker}")
         if not workspace_root.is_dir(): raise WorkstationError(f"workspace does not exist: {workspace_root}")
         security = SubprocessDockerRunner(docker).run(["info", "--format", "{{json .SecurityOptions}}"], capture=True); rootless = "rootless" in security
-        uid = int(env.get("ROBOTICS_WS_HOST_UID", str(os.getuid()))); gid = int(env.get("ROBOTICS_WS_HOST_GID", str(os.getgid())))
-        return cls(root, docker, workspace_root, state_root, env.get("ROBOTICS_WS_SHM_SIZE", "32g"), uid, gid, env.get("ROBOTICS_WS_HOST_USER", "user"), env.get("ROBOTICS_WS_DESKTOP_IMAGE", DEFAULT_IMAGE), env.get("ROBOTICS_WS_DESKTOP_NAME", "docker-ws"), int(port), env.get("ROBOTICS_WS_VNCVIEWER", "vncviewer"), "rootless" if rootless else "rootful", 0 if rootless else uid, 0 if rootless else gid)
+        uid = int(env.get("DOCKBENCH_HOST_UID", str(os.getuid()))); gid = int(env.get("DOCKBENCH_HOST_GID", str(os.getgid())))
+        return cls(root, docker, workspace_root, state_root, env.get("DOCKBENCH_SHM_SIZE", "32g"), uid, gid, env.get("DOCKBENCH_HOST_USER", "user"), env.get("DOCKBENCH_IMAGE", DEFAULT_IMAGE), env.get("DOCKBENCH_CONTAINER", "dockbench"), int(port), env.get("DOCKBENCH_VNC_VIEWER", "vncviewer"), "rootless" if rootless else "rootful", 0 if rootless else uid, 0 if rootless else gid)
 
 
 @dataclass(frozen=True)
@@ -140,55 +140,14 @@ class Workstation:
         except WorkstationError: return ""
     def _launch_spec(self) -> LaunchSpecification | None:
         if not self._container_status(): return None
-        try: return LaunchSpecification.from_label(self.docker.run(["container", "inspect", "--format", '{{index .Config.Labels "docker-ws.launch-spec"}}', self.config.container_name], capture=True))
+        try: return LaunchSpecification.from_label(self.docker.run(["container", "inspect", "--format", '{{index .Config.Labels "io.github.notanyrobot.dockbench.launch-spec"}}', self.config.container_name], capture=True))
         except WorkstationError: return None
     def _container_image_id(self) -> str | None:
         try: return self.docker.run(["container", "inspect", "--format", "{{.Image}}", self.config.container_name], capture=True)
         except WorkstationError: return None
-    def _legacy_image(self):
-        """Resolve the actual image behind a pre-launch-spec container."""
-        if not self._container_status(): return None
-        try:
-            image_id = self._container_image_id()
-            return next((image for image in getattr(self.inventory, "images")() if image.id == image_id), None)
-        except (AttributeError, WorkstationError):
-            return None
-    def _legacy_gpu_uuids(self) -> tuple[str, ...]:
-        """Recover GPU allocation for pre-launch-spec containers from Docker's device request."""
-        try:
-            raw = self.docker.run(
-                ["container", "inspect", "--format", "{{json .HostConfig.DeviceRequests}}", self.config.container_name],
-                capture=True,
-            )
-            requests = json.loads(raw) if raw else []
-        except (WorkstationError, json.JSONDecodeError, TypeError):
-            return ()
-        if not isinstance(requests, list):
-            return ()
-        selected: list[str] = []
-        for request in requests:
-            if not isinstance(request, dict):
-                continue
-            capabilities = request.get("Capabilities") or []
-            if "gpu" not in {str(capability).lower() for group in capabilities if isinstance(group, list) for capability in group}:
-                continue
-            device_ids = request.get("DeviceIDs") or []
-            if device_ids:
-                try:
-                    selected.extend(gpu.uuid for gpu in self.inventory.resolve_gpus(tuple(map(str, device_ids)), False))
-                except (AttributeError, WorkstationError):
-                    continue
-            elif request.get("Count") == -1:
-                try:
-                    host = self.inventory.inventory().public()
-                    selected.extend(str(gpu["uuid"]) for gpu in host.get("gpus", []) if gpu.get("uuid"))
-                except (AttributeError, WorkstationError, TypeError):
-                    continue
-        return tuple(dict.fromkeys(selected))
     def status(self) -> WorkstationStatus:
         raw = self._container_status(); state = "absent" if not raw else "running" if raw == "running" else "stopped" if raw in {"created", "exited"} else "unavailable"; spec = self._launch_spec()
-        legacy_image = self._legacy_image() if raw and spec is None else None
-        image_id = spec.image_id if spec else (self._container_image_id() if raw else None); image_ref = spec.image_ref if spec else (legacy_image.display_reference if legacy_image else self.config.image); desktop = spec.desktop_capable if spec else bool(legacy_image and any(ref.startswith("docker-ws:") for ref in legacy_image.references)); gpu_uuids = spec.gpu_uuids if spec else (self._legacy_gpu_uuids() if raw else ())
+        image_id = spec.image_id if spec else (self._container_image_id() if raw else None); image_ref = spec.image_ref if spec else self.config.image; desktop = spec.desktop_capable if spec else False; gpu_uuids = spec.gpu_uuids if spec else ()
         return WorkstationStatus(state, self._vnc_running() if state == "running" and desktop else False, image_ref or image_id or "", self.config.container_name, "/workspace", image_id, image_ref, gpu_uuids, desktop, None if state != "unavailable" else f"Docker state: {raw}")
     def _specification(self, image: str | None, gpus: tuple[str, ...], all_gpus: bool) -> LaunchSpecification:
         selected = self.inventory.resolve_image(image or self.config.image or ""); selected_gpus = self.inventory.resolve_gpus(gpus, all_gpus)
@@ -199,7 +158,7 @@ class Workstation:
         c = self.config; c.state_root.mkdir(parents=True, exist_ok=True)
         # Never force a platform for an arbitrary local image: Docker has
         # already resolved the image's locally available architecture.
-        args = ["run", "-d", "--name", c.container_name, "--hostname", c.container_name, "--user", "root", "--shm-size", c.shm_size, "--restart", "unless-stopped", "--label", "docker-ws.managed=true", "--label", f"docker-ws.state-root={c.state_root}", "--label", f"docker-ws.launch-spec={spec.label_value()}", "--label", f"docker-ws.image-id={spec.image_id}", "--label", f"docker-ws.image-ref={spec.image_ref}", "--label", f"docker-ws.gpus={','.join(spec.gpu_uuids)}", "--label", f"robotics-ws.launch-config={c.launch_config}", "--mount", f"type=bind,src={c.workspace_root},dst=/workspace", "--mount", f"type=bind,src={c.state_root},dst=/state"]
+        args = ["run", "-d", "--name", c.container_name, "--hostname", c.container_name, "--user", "root", "--shm-size", c.shm_size, "--restart", "unless-stopped", "--label", "io.github.notanyrobot.dockbench.managed=true", "--label", f"io.github.notanyrobot.dockbench.state-root={c.state_root}", "--label", f"io.github.notanyrobot.dockbench.launch-spec={spec.label_value()}", "--label", f"io.github.notanyrobot.dockbench.image-id={spec.image_id}", "--label", f"io.github.notanyrobot.dockbench.image-ref={spec.image_ref}", "--label", f"io.github.notanyrobot.dockbench.gpus={','.join(spec.gpu_uuids)}", "--label", f"io.github.notanyrobot.dockbench.launch-config={c.launch_config}", "--mount", f"type=bind,src={c.workspace_root},dst=/workspace", "--mount", f"type=bind,src={c.state_root},dst=/state"]
         if spec.gpu_uuids:
             device_request = f"device={','.join(spec.gpu_uuids)}"
             # Docker parses --gpus as CSV. Preserve literal double quotes when
@@ -222,18 +181,18 @@ if test "$docker_mode" = rootful; then
   if group_entry="$(getent group "$requested_gid")"; then container_group="${group_entry%%:*}"; else container_group="$requested_user"; if getent group "$container_group" >/dev/null; then container_group="${requested_user}-${requested_gid}"; fi; groupadd --gid "$requested_gid" "$container_group"; fi
   if ! getent passwd "$requested_uid" >/dev/null; then container_user="$requested_user"; if getent passwd "$container_user" >/dev/null; then container_user="${requested_user}-${requested_uid}"; fi; useradd --uid "$requested_uid" --gid "$requested_gid" --home-dir /state/home --shell /bin/bash --no-create-home "$container_user"; fi
   container_user="$(getent passwd "$requested_uid" | cut -d: -f1)"
-  printf '%s ALL=(ALL:ALL) NOPASSWD: ALL\n' "$container_user" >/etc/sudoers.d/docker-ws-user
-  chmod 0440 /etc/sudoers.d/docker-ws-user
-  visudo -cf /etc/sudoers.d/docker-ws-user >/dev/null
+  printf '%s ALL=(ALL:ALL) NOPASSWD: ALL\n' "$container_user" >/etc/sudoers.d/dockbench-user
+  chmod 0440 /etc/sudoers.d/dockbench-user
+  visudo -cf /etc/sudoers.d/dockbench-user >/dev/null
 fi
 ownership_marker="/state/.owner-${requested_uid}-${requested_gid}"
 if test "$docker_mode" = rootful && test ! -e "$ownership_marker"; then chown -R "$requested_uid:$requested_gid" /state; touch "$ownership_marker"; chown "$requested_uid:$requested_gid" "$ownership_marker"; fi
-cat >/state/.robotics-ws-bashrc <<'BASHRC'
+cat >/state/.dockbench-bashrc <<'BASHRC'
 test -r /etc/bash.bashrc && source /etc/bash.bashrc
 test -r "$HOME/.bashrc" && source "$HOME/.bashrc"
-PS1="${ROBOTICS_WS_PROMPT_USER:-user}@\\h:\\w\\$ "
+PS1="${DOCKBENCH_PROMPT_USER:-user}@\\h:\\w\\$ "
 BASHRC
-chown "$requested_uid:$requested_gid" /state/.robotics-ws-bashrc
+chown "$requested_uid:$requested_gid" /state/.dockbench-bashrc
 '''
         self.docker.run(["exec", "-i", "--user", "root", c.container_name, "/bin/bash", "-s", "--", c.host_user, str(c.container_uid), str(c.container_gid), c.docker_mode], input=script)
     def _replace(self) -> None:
@@ -270,22 +229,22 @@ chown "$requested_uid:$requested_gid" /state/.robotics-ws-bashrc
     def rebuild(self) -> WorkstationStatus:
         self.build(); return self.start(image=self.config.image or DEFAULT_IMAGE, replace=True)
     def enter(self) -> None:
-        if self._container_status() != "running": raise WorkstationError(f"{self.config.container_name} is not running; use docker-ws container start first")
+        if self._container_status() != "running": raise WorkstationError(f"{self.config.container_name} is not running; use `dockbench start` first")
         c = self.config
         if self.status().desktop_capable:
             self._prepare_user()
-            self.docker.run(["exec", "-it", "--user", f"{c.container_uid}:{c.container_gid}", "--workdir", "/workspace", "--env", "HOME=/state/home", "--env", f"USER={c.host_user}", "--env", f"LOGNAME={c.host_user}", "--env", f"ROBOTICS_WS_PROMPT_USER={c.host_user}", c.container_name, "/bin/bash", "--rcfile", "/state/.robotics-ws-bashrc"])
+            self.docker.run(["exec", "-it", "--user", f"{c.container_uid}:{c.container_gid}", "--workdir", "/workspace", "--env", "HOME=/state/home", "--env", f"USER={c.host_user}", "--env", f"LOGNAME={c.host_user}", "--env", f"DOCKBENCH_PROMPT_USER={c.host_user}", c.container_name, "/bin/bash", "--rcfile", "/state/.dockbench-bashrc"])
         else:
             self.docker.run(["exec", "-it", "--user", "root", "--workdir", "/workspace", c.container_name, "/bin/sh", "-lc", "if command -v bash >/dev/null 2>&1; then exec bash -l; else exec /bin/sh; fi"])
     def stop(self) -> WorkstationStatus:
         with self.locked():
             raw = self._container_status()
-            if not raw: raise WorkstationError(f"{self.config.container_name} does not exist; use docker-ws container start first")
+            if not raw: raise WorkstationError(f"{self.config.container_name} does not exist; use `dockbench start` first")
             if raw == "running": self.docker.run(["stop", self.config.container_name])
             elif raw not in {"created", "exited"}: raise WorkstationError(f"unsupported container state for --stop: {raw}")
             return self.status()
     def _require_desktop(self) -> None:
-        if not self.status().desktop_capable: raise WorkstationError("The selected image does not advertise Docker Workstation desktop contract v1; shell access remains available with docker-ws container enter.")
+        if not self.status().desktop_capable: raise WorkstationError("The selected image does not advertise the Dockbench desktop contract v1; shell access remains available with `dockbench shell`.")
     def _password_exists(self) -> bool:
         c = self.config
         try: self.docker.run(["exec", "--user", f"{c.container_uid}:{c.container_gid}", c.container_name, "/bin/bash", "-c", "test -s /state/home/.vnc/passwd"]); return True
@@ -296,7 +255,7 @@ chown "$requested_uid:$requested_gid" /state/.robotics-ws-bashrc
             self.docker.run(["exec", "--user", f"{c.container_uid}:{c.container_gid}", c.container_name, "/bin/bash", "-c", 'if test "$(wc -c < /state/home/.vnc/passwd)" -gt 8; then truncate -s 8 /state/home/.vnc/passwd; HOME=/state/home vncserver -kill :1 >/dev/null 2>&1 || true; fi'])
             return
         self.docker.run(["exec", "--user", "root", c.container_name, "install", "-d", "-m", "700", "-o", str(c.container_uid), "-g", str(c.container_gid), "/state/home/.vnc"])
-        password = password or os.environ.get("ROBOTICS_WS_VNC_PASSWORD")
+        password = password or os.environ.get("DOCKBENCH_VNC_PASSWORD")
         if password: self.docker.run(["exec", "-i", "--user", f"{c.container_uid}:{c.container_gid}", c.container_name, "/bin/bash", "-c", "vncpasswd -f > /state/home/.vnc/passwd && chmod 600 /state/home/.vnc/passwd"], input=password + "\n")
         elif prompt: self.docker.run(["exec", "-it", "--user", f"{c.container_uid}:{c.container_gid}", c.container_name, "vncpasswd", "/state/home/.vnc/passwd"])
         else: raise WorkstationError("VNC password must be provided before opening the desktop")
@@ -379,7 +338,7 @@ HOME=/state/home vncserver -kill :1 >/dev/null 2>&1 || true
     def open_vnc(self) -> None:
         if shutil.which(self.config.vncviewer_command) is None: raise WorkstationError(f"VNC viewer not found: {self.config.vncviewer_command}")
         self._require_desktop()
-        if self._container_status() != "running": raise WorkstationError(f"{self.config.container_name} is not running; use docker-ws container start first")
+        if self._container_status() != "running": raise WorkstationError(f"{self.config.container_name} is not running; use `dockbench start` first")
         with self.locked(): self._prepare_user(); self._ensure_vnc_password(prompt=True); self._start_vnc(); self._wait_for_vnc()
         password_file = self.config.state_root / "home/.vnc/passwd"
         if not os.access(password_file, os.R_OK): raise WorkstationError(f"VNC password file is not readable from the host: {password_file}")
@@ -387,13 +346,13 @@ HOME=/state/home vncserver -kill :1 >/dev/null 2>&1 || true
 
 
 class FleetManager:
-    """Managed-only multi-container lifecycle facade used by Workbench.
+    """Managed-only multi-container lifecycle facade used by Dockbench.
 
     CLI commands keep using ``Workstation`` and the configured default name.
-    Labels form the fleet discovery boundary; the legacy default is the sole
-    compatibility exception, so unrelated Docker containers are never shown.
+    Labels form the fleet discovery boundary, so unrelated Docker containers
+    are never shown.
     """
-    managed_label = "docker-ws.managed=true"
+    managed_label = "io.github.notanyrobot.dockbench.managed=true"
     _name = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,62}$")
 
     def __init__(self, config: WorkstationConfig | None = None, runner: DockerRunner | None = None,
@@ -428,34 +387,7 @@ class FleetManager:
             names = {line.strip() for line in output.splitlines() if self._name.fullmatch(line.strip())}
         except WorkstationError:
             names = set()
-        if self._is_legacy_default():
-            names.add(self.config.container_name)
         return tuple(sorted(names))
-
-    def _is_legacy_default(self) -> bool:
-        """Recognize the historical default only when its workstation labels prove ownership.
-
-        Container names are user-controlled Docker namespace.  In particular,
-        an unrelated container named ``docker-ws`` must not become manageable
-        merely because it happens to match our default name.
-        """
-        name = self.config.container_name
-        if not self._exists(name):
-            return False
-        try:
-            launch_spec = self.docker.run(
-                ["container", "inspect", "--format", '{{index .Config.Labels "docker-ws.launch-spec"}}', name],
-                capture=True,
-            )
-            if LaunchSpecification.from_label(launch_spec) is not None:
-                return True
-            launch_config = self.docker.run(
-                ["container", "inspect", "--format", '{{index .Config.Labels "robotics-ws.launch-config"}}', name],
-                capture=True,
-            )
-            return launch_config == self.config.launch_config
-        except WorkstationError:
-            return False
 
     def _config_for(self, name: str) -> WorkstationConfig:
         self._validate_name(name)
@@ -492,7 +424,7 @@ class FleetManager:
     def container(self, name: str) -> WorkstationStatus:
         self._validate_name(name)
         if name not in self._managed_names():
-            raise WorkstationError("container is not managed by Docker Workstation")
+            raise WorkstationError("container is not managed by Dockbench")
         return self._status(name)
 
     def _reserved_gpus(self, excluding: str | None = None) -> dict[str, str]:
@@ -565,7 +497,7 @@ class FleetManager:
     def delete_state(self, name: str) -> None:
         name = self._validate_name(name)
         if self._exists(name): raise WorkstationError("remove the container before deleting its persistent state")
-        if name == self.config.container_name: raise WorkstationError("the legacy default state cannot be deleted from Workbench")
+        if name == self.config.container_name: raise WorkstationError("the default Dockbench state cannot be deleted")
         path = self._config_for(name).state_root
         if path.is_dir(): shutil.rmtree(path)
 

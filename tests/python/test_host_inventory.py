@@ -3,9 +3,8 @@ import subprocess
 
 import pytest
 
-from docker_ws.core.errors import WorkstationError
-from docker_ws.core.defaults import DEFAULT_IMAGE
-from docker_ws.core.host_inventory import HostInventory
+from dockbench.core.errors import WorkstationError
+from dockbench.core.host_inventory import DESKTOP_CONTRACT_LABEL, HostInventory
 
 
 class Docker:
@@ -24,25 +23,37 @@ def test_images_are_tagged_grouped_and_resolved(monkeypatch):
     assert inventory.resolve_image("ubuntu:latest").id == "sha256:full"
 
 
-def test_pre_label_default_desktop_image_retains_desktop_capability():
-    class LegacyDesktopDocker(Docker):
+def test_dockbench_desktop_label_marks_an_image_desktop_capable():
+    class DesktopDocker(Docker):
         def run(self, args, **kwargs):
-            if args[:2] == ["image", "ls"]: return "sha256:short\tdocker-ws\tu22.04-cu12.8.1-v1-desktop"
+            if args[:2] == ["image", "ls"]: return "sha256:short\tandroid-ws\tu22.04-cu12.8-v2"
             if args[:2] == ["image", "inspect"]:
-                return json.dumps({"Id": "sha256:desktop", "RepoTags": [DEFAULT_IMAGE], "Size": 42, "Created": "now", "Architecture": "amd64", "Config": {"Labels": {}}})
+                return json.dumps({"Id": "sha256:desktop", "RepoTags": ["android-ws:u22.04-cu12.8-v2"], "Size": 42, "Created": "now", "Architecture": "amd64", "Config": {"Labels": {DESKTOP_CONTRACT_LABEL: "v1"}}})
             return super().run(args, **kwargs)
 
-    assert HostInventory(LegacyDesktopDocker()).images()[0].desktop_capable is True
+    assert HostInventory(DesktopDocker()).images()[0].desktop_capable is True
+
+
+def test_former_desktop_label_is_not_accepted():
+    class FormerDesktopDocker(Docker):
+        def run(self, args, **kwargs):
+            if args[:2] == ["image", "ls"]:
+                return "sha256:short\tandroid-ws\tu22.04-cu12.8-v2"
+            if args[:2] == ["image", "inspect"]:
+                return json.dumps({"Id": "sha256:desktop", "RepoTags": ["android-ws:u22.04-cu12.8-v2"], "Size": 42, "Created": "now", "Architecture": "amd64", "Config": {"Labels": {"io.docker-workstation.desktop-contract": "v1"}}})
+            return super().run(args, **kwargs)
+
+    assert HostInventory(FormerDesktopDocker()).images()[0].desktop_capable is False
 
 
 def test_gpu_diagnostic_is_safe_when_nvidia_smi_is_absent(monkeypatch):
-    monkeypatch.setattr("docker_ws.core.host_inventory.shutil.which", lambda value: None)
+    monkeypatch.setattr("dockbench.core.host_inventory.shutil.which", lambda value: None)
     gpus, diagnostic = HostInventory(Docker()).gpus()
     assert gpus == () and "nvidia-smi" in diagnostic
 
 
 def test_gpu_uuid_index_resolution_and_duplicate_rejection(monkeypatch):
-    monkeypatch.setattr("docker_ws.core.host_inventory.shutil.which", lambda value: "/usr/bin/nvidia-smi")
+    monkeypatch.setattr("dockbench.core.host_inventory.shutil.which", lambda value: "/usr/bin/nvidia-smi")
     def run(*args, **kwargs): return subprocess.CompletedProcess(args[0], 0, "0, GPU-a, Test, 1024\n1, GPU-b, Test 2, 2048\n", "")
     inventory = HostInventory(Docker(), run)
     assert [gpu.uuid for gpu in inventory.resolve_gpus(("0", "GPU-b"))] == ["GPU-a", "GPU-b"]

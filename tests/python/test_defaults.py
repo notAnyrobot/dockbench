@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from docker_ws.core.defaults import default_workspace
+from dockbench.core.defaults import default_workspace
 
 
 def test_default_workspace_uses_home_workspace_on_local_machine(tmp_path):

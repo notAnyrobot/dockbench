@@ -15,7 +15,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Final
 
-from docker_ws.core.errors import WorkstationError
+from dockbench.core.errors import WorkstationError
 
 
 RECIPE_SCHEMA_VERSION: Final = 1

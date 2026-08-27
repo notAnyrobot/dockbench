@@ -4,7 +4,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Protocol
 
-from docker_ws.core.host_inventory import DESKTOP_CONTRACT_LABEL
+from dockbench.core.host_inventory import DESKTOP_CONTRACT_LABEL
 
 
 class DockerRunner(Protocol):

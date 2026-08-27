@@ -3,8 +3,8 @@ from io import BytesIO
 
 import pytest
 
-from docker_ws.core.errors import WorkstationError
-from docker_ws.core import workbench_connection as connection
+from dockbench.core.errors import WorkstationError
+from dockbench.core import server_connection as connection
 
 
 class FakeProcess:
@@ -189,7 +189,7 @@ def test_health_timeout_starts_after_interactive_ssh_authentication(monkeypatch)
     with pytest.raises(WorkstationError, match="did not answer through the local forward") as exc_info:
         connection.connect("gpu", open_browser=False)
     assert "SSH tunnel to gpu is up" not in str(exc_info.value)
-    assert "workbench status" in str(exc_info.value)
+    assert "dockbench server status" in str(exc_info.value)
     assert health_requests == ["http://127.0.0.1:8787"]
     assert process.terminated and process.wait_calls == [5]
 

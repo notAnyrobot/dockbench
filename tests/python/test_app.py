@@ -6,27 +6,27 @@ import pytest
 from fastapi.testclient import TestClient
 from starlette.websockets import WebSocketDisconnect
 
-from docker_ws.core.workstation import (
+from dockbench.core.workstation import (
     WorkstationError,
     WorkstationRebuildRequired,
     WorkstationStatus,
 )
-from docker_ws.core.errors import WorkstationGPUConflict
-from docker_ws.core.errors import DockerCommandError
-from docker_ws.web.app import DesktopSessions, _redact_image_log, create_app
-from docker_ws.core.recipes import RecipeError
+from dockbench.core.errors import WorkstationGPUConflict
+from dockbench.core.errors import DockerCommandError
+from dockbench.web.app import DesktopSessions, _redact_image_log, create_app
+from dockbench.core.recipes import RecipeError
 
 
 class FakeWorkstation:
     reset_password: str | None = None
-    def status(self): return WorkstationStatus("stopped", False, "test", "docker-ws", "/workspace")
+    def status(self): return WorkstationStatus("stopped", False, "test", "dockbench", "/workspace")
     def start(self, *args):
         self.start_args = args
-        return WorkstationStatus("running", False, "test", "docker-ws", "/workspace")
-    def stop(self): return WorkstationStatus("stopped", False, "test", "docker-ws", "/workspace")
+        return WorkstationStatus("running", False, "test", "dockbench", "/workspace")
+    def stop(self): return WorkstationStatus("stopped", False, "test", "dockbench", "/workspace")
     def reset_vnc_password(self, password):
         self.reset_password = password
-        return WorkstationStatus("running", True, "test", "docker-ws", "/workspace")
+        return WorkstationStatus("running", True, "test", "dockbench", "/workspace")
 
 
 class FakeFleet:
@@ -147,7 +147,7 @@ def test_workstation_errors_are_redacted_from_the_response():
     status = client.get("/api/workstation")
     response = client.post("/api/workstation/start", headers={"origin": "http://testserver", "x-csrf-token": status.json()["csrf_token"]})
     assert response.status_code == 503
-    assert response.json()["message"] == "Docker Workstation is unavailable. Check its status and try again."
+    assert response.json()["message"] == "Dockbench is unavailable. Check its status and try again."
     assert "secret" not in response.text
 
 
@@ -193,7 +193,7 @@ def test_stale_workstation_returns_actionable_rebuild_error():
     assert response.json()["code"] == "workstation_rebuild_required"
     assert response.json()["message"] == (
         "The workstation image or launch settings changed. Run "
-        "`uv run docker-ws image rebuild`, then try again."
+        "`uv run dockbench image rebuild`, then try again."
     )
     assert "private" not in response.text
 
@@ -236,7 +236,7 @@ def test_fleet_inventory_and_container_lifecycle_routes_are_scoped_and_csrf_prot
     assert fleet.removed == "alpha"
 
 
-def test_csrf_token_remains_valid_when_another_workbench_tab_initializes():
+def test_csrf_token_remains_valid_when_another_dockbench_tab_initializes():
     client = TestClient(create_app(FakeWorkstation(), fleet=FakeFleet()))
     first_token = client.get("/api/containers").json()["csrf_token"]
     second_token = client.get("/api/containers").json()["csrf_token"]

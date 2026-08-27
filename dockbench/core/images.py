@@ -8,8 +8,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Sequence
 
-from docker_ws.core.defaults import DEFAULT_IMAGE
-from docker_ws.core.workstation import WorkstationError
+from dockbench.core.defaults import DEFAULT_IMAGE
+from dockbench.core.workstation import WorkstationError
 
 
 ARCHIVE_NAME = "android-ws-u22.04-cu12.8-v2.tar"
@@ -24,8 +24,8 @@ class ImagePackageResult:
 class WorkstationImages:
     """Own image-transfer policy and Docker interaction behind a small API."""
     def __init__(self, docker_command: str | None = None, image: str | None = None, run: Run = subprocess.run) -> None:
-        self.docker_command = docker_command or os.environ.get("ROBOTICS_WS_DOCKER", "docker")
-        self.image = image or os.environ.get("ROBOTICS_WS_DESKTOP_IMAGE", DEFAULT_IMAGE)
+        self.docker_command = docker_command or os.environ.get("DOCKBENCH_DOCKER", "docker")
+        self.image = image or os.environ.get("DOCKBENCH_IMAGE", DEFAULT_IMAGE)
         self._run = run
 
     def _docker(self) -> str:

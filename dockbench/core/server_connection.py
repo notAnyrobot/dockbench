@@ -1,6 +1,6 @@
-"""Loopback SSH tunnel lifecycle for a remote Docker Workbench server.
+"""Loopback SSH tunnel lifecycle for a remote Dockbench server.
 
-The module deliberately knows nothing about Docker or the Workbench build.  A
+The module deliberately knows nothing about Docker or the Dockbench build.  A
 local client only needs OpenSSH and an SSH configuration that can reach the
 remote host; the server continues to bind to the remote loopback interface.
 """
@@ -17,10 +17,10 @@ from dataclasses import dataclass
 import json
 from typing import Callable
 
-from docker_ws.core.errors import WorkstationError
+from dockbench.core.errors import WorkstationError
 
 
-DEFAULT_WORKBENCH_PORT = 8787
+DEFAULT_SERVER_PORT = 8787
 HEALTH_PATH = "/api/health"
 HEALTH_TIMEOUT_SECONDS = 20.0
 HEALTH_POLL_INTERVAL_SECONDS = 0.2
@@ -30,8 +30,8 @@ SSH_SERVER_ALIVE_COUNT_MAX = 3
 
 
 @dataclass(frozen=True)
-class WorkbenchConnectionResult:
-    """Details of a tunnel that reached Workbench and then ended cleanly."""
+class ServerConnectionResult:
+    """Details of a tunnel that reached Dockbench and then ended cleanly."""
 
     ssh_host: str
     local_port: int
@@ -72,14 +72,14 @@ def _choose_local_port(requested_port: int | None) -> int:
         if not _is_port_available(port):
             raise WorkstationError(f"Local port {port} is already in use; choose another --local-port")
         return port
-    if _is_port_available(DEFAULT_WORKBENCH_PORT):
-        return DEFAULT_WORKBENCH_PORT
+    if _is_port_available(DEFAULT_SERVER_PORT):
+        return DEFAULT_SERVER_PORT
     try:
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
             probe.bind(("127.0.0.1", 0))
             return int(probe.getsockname()[1])
     except OSError as exc:
-        raise WorkstationError("Could not select a free local port for Docker Workbench") from exc
+        raise WorkstationError("Could not select a free local port for Dockbench") from exc
 
 
 def _ssh_command(ssh_command: str, ssh_host: str, local_port: int, remote_port: int) -> list[str]:
@@ -117,7 +117,7 @@ def _tunnel_is_listening(port: int) -> bool:
     """Return whether SSH has installed the local forwarding listener.
 
     OpenSSH creates local forwarding listeners only after authentication and
-    session setup.  Waiting for that listener keeps the Workbench readiness
+    session setup.  Waiting for that listener keeps the Dockbench readiness
     timeout from running while the user is at an interactive password prompt.
     """
     try:
@@ -140,8 +140,8 @@ def _terminate(process: subprocess.Popen[object]) -> None:
 
 def _unavailable_error(ssh_host: str, remote_port: int) -> WorkstationError:
     return WorkstationError(
-        f"Docker Workbench did not answer through the local forward to {ssh_host} remote port {remote_port}. "
-        "Verify 'docker-ws workbench status' (or, if needed, 'docker-ws workbench deploy') on the remote host "
+        f"Dockbench did not answer through the local forward to {ssh_host} remote port {remote_port}. "
+        "Verify 'dockbench server status' (or, if needed, 'dockbench deploy') on the remote host "
         "and SSH forwarding, then retry."
     )
 
@@ -150,11 +150,11 @@ def connect(
     ssh_host: str,
     *,
     local_port: int | None = None,
-    remote_port: int = DEFAULT_WORKBENCH_PORT,
+    remote_port: int = DEFAULT_SERVER_PORT,
     open_browser: bool = False,
     on_ready: Callable[[str], None] | None = None,
-) -> WorkbenchConnectionResult:
-    """Open a foreground SSH tunnel to a remote Workbench.
+) -> ServerConnectionResult:
+    """Open a foreground SSH tunnel to a remote Dockbench.
 
     ``local_port=None`` deliberately means "prefer 8787, otherwise choose a
     free port".  Passing an integer is an explicit choice and fails when that
@@ -181,7 +181,7 @@ def connect(
     browser_opened = False
     try:
         # Do not put a deadline around interactive SSH authentication.  Until
-        # OpenSSH has installed its local listener, a Workbench health timeout
+        # OpenSSH has installed its local listener, a Dockbench health timeout
         # would misleadingly report that a tunnel exists when it does not.
         while True:
             exit_code = process.poll()
@@ -195,7 +195,7 @@ def connect(
         while time.monotonic() < deadline:
             exit_code = process.poll()
             if exit_code is not None:
-                raise WorkstationError(f"SSH tunnel to {host} exited before Docker Workbench became ready (exit code {exit_code})")
+                raise WorkstationError(f"SSH tunnel to {host} exited before Dockbench became ready (exit code {exit_code})")
             if _health_ready(url):
                 if on_ready is not None:
                     on_ready(url)
@@ -210,6 +210,6 @@ def connect(
             time.sleep(HEALTH_POLL_INTERVAL_SECONDS)
         raise WorkstationError(f"SSH tunnel to {host} exited (exit code {process.returncode})")
     except KeyboardInterrupt:
-        return WorkbenchConnectionResult(host, local, remote, url, browser_opened, True)
+        return ServerConnectionResult(host, local, remote, url, browser_opened, True)
     finally:
         _terminate(process)
