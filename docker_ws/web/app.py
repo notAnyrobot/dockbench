@@ -16,7 +16,7 @@ import time
 import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from fastapi import Cookie, FastAPI, HTTPException, Request, Response, WebSocket, WebSocketDisconnect
 from fastapi.concurrency import run_in_threadpool
@@ -41,6 +41,7 @@ LOG = logging.getLogger(__name__)
 ROOT = Path(__file__).resolve().parents[2]
 WEB_DIST = ROOT / "apps" / "workbench" / "dist"
 SESSION_TTL_SECONDS = 60
+MAX_IMAGE_JOB_LOG_LINES = 2000
 
 
 @dataclass
@@ -66,6 +67,7 @@ class ImageJob:
     message: str = ""
     created_at: float = 0
     logs: list[str] = field(default_factory=list)
+    code: str | None = None
 
 
 _SENSITIVE_LOG_VALUE = re.compile(r"(?i)\b(password|token|secret|authorization|cookie)\b\s*([=:])\s*[^\s,;]+")
@@ -545,31 +547,42 @@ def create_app(workstation: Workstation | None = None, fleet: Any | None = None,
         except Exception as exc:
             return safe_error(exc)
 
-    def start_image_job(kind: str, operation: Any) -> ImageJob:
+    def start_image_job(kind: str, operation: Callable[[Callable[[str], None]], Any]) -> ImageJob:
         queued = app.state.image_job_lock.locked()
         job = ImageJob(uuid.uuid4().hex, kind, state="queued" if queued else "running",
                        message="Waiting for another image operation." if queued else "Starting image operation.",
                        created_at=time.time(), logs=["queued" if queued else "starting"])
         app.state.image_jobs[job.id] = job
 
+        def report(value: str) -> None:
+            lines = _redact_image_log(value).splitlines() or [""]
+            job.logs.extend(lines)
+            if len(job.logs) > MAX_IMAGE_JOB_LOG_LINES:
+                del job.logs[:-MAX_IMAGE_JOB_LOG_LINES]
+
         async def run() -> None:
             async with app.state.image_job_lock:
                 job.state = "running"
                 job.message = "Image operation is running."
-                job.logs.append("running")
+                report("running")
                 try:
-                    output = await run_in_threadpool(operation)
+                    output = await run_in_threadpool(operation, report)
                 except Exception as exc:
                     LOG.warning("image job failed id=%s kind=%s error=%s", job.id, kind, type(exc).__name__)
                     job.state = "failed"
-                    job.message = "Image operation failed. Check Docker Workstation logs and try again."
-                    job.logs.append("failed")
+                    if isinstance(exc, DockerCommandError):
+                        job.code = "docker_error"
+                        job.message = _safe_docker_error(str(exc))
+                        report(job.message)
+                    else:
+                        job.message = "Image operation failed. Check Docker Workstation logs and try again."
+                    report("failed")
                 else:
-                    if output:
-                        job.logs.extend(_redact_image_log(str(output)).splitlines())
+                    if isinstance(output, str) and output:
+                        report(output)
                     job.state = "completed"
                     job.message = "Image operation completed."
-                    job.logs.append("completed")
+                    report("completed")
 
         asyncio.create_task(run())
         return job
@@ -583,8 +596,9 @@ def create_app(workstation: Workstation | None = None, fleet: Any | None = None,
             overrides = {field: getattr(body, field) for field in ("tag", "target", "platform")
                          if field in body.model_fields_set}
 
-            def build() -> Any:
-                return recipe_builder().build(recipe, no_cache=body.no_cache, **overrides)
+            def build(report: Callable[[str], None]) -> Any:
+                return recipe_builder().build(recipe, no_cache=body.no_cache,
+                                              on_progress=report, **overrides)
 
             job = start_image_job("no-cache build" if body.no_cache else "build", build)
             return {"id": job.id, "kind": job.kind, "state": job.state}
@@ -595,7 +609,7 @@ def create_app(workstation: Workstation | None = None, fleet: Any | None = None,
     async def verify_image(image_id: str, request: Request, workbench_csrf: str | None = Cookie(default=None)):
         _require_csrf(request, workbench_csrf)
         try:
-            job = start_image_job("verify", lambda: image_verifier().verify(image_id))
+            job = start_image_job("verify", lambda _report: image_verifier().verify(image_id))
             return {"id": job.id, "kind": job.kind, "state": job.state}
         except Exception as exc:
             return safe_error(exc)
@@ -606,7 +620,7 @@ def create_app(workstation: Workstation | None = None, fleet: Any | None = None,
         if job is None:
             raise HTTPException(404, "Image job not found")
         return {"id": job.id, "kind": job.kind, "state": job.state, "message": job.message,
-                "created_at": job.created_at, "logs": job.logs}
+                "code": job.code, "created_at": job.created_at, "logs": job.logs}
 
     @app.post("/api/images/load")
     async def load_image(request: Request, workbench_csrf: str | None = Cookie(default=None)):
@@ -622,7 +636,7 @@ def create_app(workstation: Workstation | None = None, fleet: Any | None = None,
                 raise HTTPException(422, "Image archive is empty")
             manager = managed_fleet()
 
-            def load() -> None:
+            def load(_report: Callable[[str], None]) -> None:
                 try:
                     return manager.docker.run(["image", "load", "--input", str(temporary_path)], capture=True)
                 finally:

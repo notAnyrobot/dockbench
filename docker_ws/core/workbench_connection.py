@@ -99,13 +99,31 @@ def _ssh_command(ssh_command: str, ssh_host: str, local_port: int, remote_port: 
 
 
 def _health_ready(url: str) -> bool:
+    # ``url`` is the local end of an SSH tunnel.  Explicitly disable proxy
+    # discovery: urllib otherwise honors HTTP(S)_PROXY, which can send a
+    # loopback health check to a corporate proxy instead of the tunnel.
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
     try:
-        with urllib.request.urlopen(url + HEALTH_PATH, timeout=HEALTH_REQUEST_TIMEOUT_SECONDS) as response:
+        with opener.open(url + HEALTH_PATH, timeout=HEALTH_REQUEST_TIMEOUT_SECONDS) as response:
             if not 200 <= response.status < 300:
                 return False
             payload = json.loads(response.read().decode("utf-8"))
             return isinstance(payload, dict) and payload.get("status") == "ok"
     except (json.JSONDecodeError, UnicodeDecodeError, urllib.error.URLError, OSError, TimeoutError):
+        return False
+
+
+def _tunnel_is_listening(port: int) -> bool:
+    """Return whether SSH has installed the local forwarding listener.
+
+    OpenSSH creates local forwarding listeners only after authentication and
+    session setup.  Waiting for that listener keeps the Workbench readiness
+    timeout from running while the user is at an interactive password prompt.
+    """
+    try:
+        with socket.create_connection(("127.0.0.1", port), timeout=HEALTH_REQUEST_TIMEOUT_SECONDS):
+            return True
+    except OSError:
         return False
 
 
@@ -122,8 +140,9 @@ def _terminate(process: subprocess.Popen[object]) -> None:
 
 def _unavailable_error(ssh_host: str, remote_port: int) -> WorkstationError:
     return WorkstationError(
-        f"SSH tunnel to {ssh_host} is up, but Docker Workbench is not healthy on remote port {remote_port}. "
-        "Run 'docker-ws workbench deploy' on the remote host, then retry."
+        f"Docker Workbench did not answer through the local forward to {ssh_host} remote port {remote_port}. "
+        "Verify 'docker-ws workbench status' (or, if needed, 'docker-ws workbench deploy') on the remote host "
+        "and SSH forwarding, then retry."
     )
 
 
@@ -161,6 +180,17 @@ def connect(
 
     browser_opened = False
     try:
+        # Do not put a deadline around interactive SSH authentication.  Until
+        # OpenSSH has installed its local listener, a Workbench health timeout
+        # would misleadingly report that a tunnel exists when it does not.
+        while True:
+            exit_code = process.poll()
+            if exit_code is not None:
+                raise WorkstationError(f"SSH tunnel to {host} exited before it became usable (exit code {exit_code})")
+            if _tunnel_is_listening(local):
+                break
+            time.sleep(HEALTH_POLL_INTERVAL_SECONDS)
+
         deadline = time.monotonic() + HEALTH_TIMEOUT_SECONDS
         while time.monotonic() < deadline:
             exit_code = process.poll()

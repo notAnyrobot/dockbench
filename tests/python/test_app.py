@@ -1,4 +1,5 @@
 import asyncio
+import json
 import time
 
 import pytest
@@ -71,7 +72,12 @@ class FakeRecipes:
 
 class FakeImageBuilder:
     def __init__(self): self.calls = []
-    def build(self, recipe, **kwargs): self.calls.append((recipe, kwargs)); return "build completed"
+    def build(self, recipe, *, on_progress=None, **kwargs):
+        self.calls.append((recipe, kwargs))
+        if on_progress is not None:
+            on_progress("#7 downloading token=private-package")
+            on_progress("#7 42% complete")
+        return "build completed"
 
 
 class FakeImageVerifier:
@@ -313,9 +319,37 @@ def test_build_and_verify_are_csrf_protected_serialized_image_jobs():
         assert build.status_code == 200
         build_job = wait_for_job(build.json()["id"])
         assert build_job.json()["state"] == "completed"
+        assert "#7 downloading token=[REDACTED]" in build_job.json()["logs"]
+        assert "#7 42% complete" in build_job.json()["logs"]
         assert builder.calls and builder.calls[0][1] == {"tag": "custom:two", "target": None, "no_cache": True}
         verify = client.post("/api/images/sha256:one/verify", headers=headers)
         assert verify.status_code == 200
         verify_job = wait_for_job(verify.json()["id"])
         assert verify_job.json()["state"] == "completed"
         assert verifier.calls == ["sha256:one"]
+
+
+def test_failed_image_build_reports_sanitized_progress_and_actionable_error():
+    class FailingImageBuilder:
+        def build(self, recipe, *, on_progress, **kwargs):
+            on_progress("#2 pulling token=private-registry-token")
+            raise DockerCommandError("Error response from daemon: registry timeout token=private-registry-token")
+
+    app = create_app(FakeWorkstation(), fleet=FakeFleet(), recipes=FakeRecipes(),
+                     image_builder=FailingImageBuilder(), image_verifier=FakeImageVerifier())
+    with TestClient(app) as client:
+        token = client.get("/api/image-recipes").json()["csrf_token"]
+        started = client.post("/api/images/build", json={"recipe_id": "android-ws"},
+                              headers={"origin": "http://testserver", "x-csrf-token": token})
+        for _ in range(100):
+            job = client.get(f"/api/image-jobs/{started.json()['id']}").json()
+            if job["state"] == "failed":
+                break
+            time.sleep(0.001)
+        else:
+            pytest.fail("image build did not fail")
+
+        assert "#2 pulling token=[REDACTED]" in job["logs"]
+        assert job["code"] == "docker_error"
+        assert "registry timeout" in job["message"]
+        assert "private-registry-token" not in json.dumps(job)

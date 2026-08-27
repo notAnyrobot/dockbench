@@ -2,13 +2,14 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Protocol
+from typing import Callable, Protocol
 
 from docker_ws.core.recipes import ImageRecipe, RecipeCatalog, RecipeError, UNSET, _Unset, resolve_manifest_overrides
 
 
 class DockerRunner(Protocol):
-    def run(self, args: list[str], *, input: str | None = None, capture: bool = False, check: bool = True) -> str: ...
+    def run(self, args: list[str], *, input: str | None = None, capture: bool = False,
+            check: bool = True, on_output: Callable[[str], None] | None = None) -> str: ...
 
 
 @dataclass(frozen=True)
@@ -35,6 +36,7 @@ class ImageBuilder:
         target: str | None | _Unset = UNSET,
         platform: str | _Unset = UNSET,
         no_cache: bool = False,
+        on_progress: Callable[[str], None] | None = None,
     ) -> ImageBuildResult:
         # The recipe itself carries a context directory.  Constructing a fresh
         # catalog from its parent prevents callers from accidentally building a
@@ -45,11 +47,11 @@ class ImageBuilder:
         # This public helper reuses the manifest validation used for uploaded
         # data, so Docker never receives unchecked web/CLI input.
         validated = resolve_manifest_overrides(recipe.manifest, tag=tag, target=target, platform=platform)
-        command = ["buildx", "build", "--platform", validated.platform, "--file", str(recipe.dockerfile_path)]
+        command = ["buildx", "build", "--progress=plain", "--platform", validated.platform, "--file", str(recipe.dockerfile_path)]
         if validated.target is not None:
             command.extend(["--target", validated.target])
         if no_cache:
             command.append("--no-cache")
         command.extend(["--load", "--tag", validated.tag, str(recipe.directory)])
-        self.docker.run(command)
+        self.docker.run(command, on_output=on_progress)
         return ImageBuildResult(recipe, validated.tag, validated.target, validated.platform, no_cache, tuple(command))

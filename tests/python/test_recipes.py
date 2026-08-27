@@ -12,9 +12,13 @@ class FakeDocker:
     def __init__(self, label=""):
         self.label = label
         self.commands = []
+        self.progress = []
 
-    def run(self, args, *, input=None, capture=False, check=True):
+    def run(self, args, *, input=None, capture=False, check=True, on_output=None):
         self.commands.append(args)
+        if on_output is not None:
+            on_output("#1 loading build definition")
+            self.progress.append("reported")
         if args[:2] == ["image", "inspect"]:
             return self.label
         return ""
@@ -85,10 +89,12 @@ def test_build_uses_recipe_context_defaults_and_explicit_overrides(tmp_path):
     catalog = RecipeCatalog(tmp_path / "images")
     recipe = catalog.create("demo", "FROM scratch\n", tag="demo:v1", target="desktop", platform="linux/amd64")
     docker = FakeDocker()
-    result = ImageBuilder(docker).build(recipe, no_cache=True)
+    progress = []
+    result = ImageBuilder(docker).build(recipe, no_cache=True, on_progress=progress.append)
     assert result.tag == "demo:v1"
+    assert progress == ["#1 loading build definition"]
     assert docker.commands == [[
-        "buildx", "build", "--platform", "linux/amd64", "--file", str(recipe.dockerfile_path),
+        "buildx", "build", "--progress=plain", "--platform", "linux/amd64", "--file", str(recipe.dockerfile_path),
         "--target", "desktop", "--no-cache", "--load", "--tag", "demo:v1", str(recipe.directory),
     ]]
 
@@ -97,7 +103,7 @@ def test_build_uses_recipe_context_defaults_and_explicit_overrides(tmp_path):
     assert result.target is None
     assert "--target" not in docker.commands[0]
     assert docker.commands[0] == [
-        "buildx", "build", "--platform", "linux/arm64", "--file", str(recipe.dockerfile_path),
+        "buildx", "build", "--progress=plain", "--platform", "linux/arm64", "--file", str(recipe.dockerfile_path),
         "--load", "--tag", "demo:custom", str(recipe.directory),
     ]
 

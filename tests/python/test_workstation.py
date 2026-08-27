@@ -1,5 +1,6 @@
 from pathlib import Path
 import subprocess
+import threading
 
 import pytest
 
@@ -30,8 +31,9 @@ class FakeInventory:
 class FakeDocker:
     def __init__(self, config):
         self.config = config; self.state = ""; self.commands = []; self.inputs = []; self.launch_spec = ""; self.vnc = False
-    def run(self, args, *, input=None, capture=False, check=True):
+    def run(self, args, *, input=None, capture=False, check=True, on_output=None):
         self.commands.append(args); self.inputs.append(input); command = " ".join(args)
+        if on_output is not None: on_output("build progress")
         if args[:2] == ["container", "inspect"]:
             if not self.state: raise WorkstationError("not found")
             if "docker-ws.launch-spec" in command: return self.launch_spec
@@ -91,6 +93,39 @@ def test_docker_runner_retains_daemon_stderr_for_sanitized_workbench_errors(monk
     assert calls[0][1]["stderr"] is subprocess.PIPE
 
 
+def test_docker_runner_streams_combined_output_and_retains_failure_tail():
+    progress = []
+    errors = []
+    received = threading.Event()
+    release = threading.Event()
+
+    def report(line):
+        progress.append(line)
+        if line == "step one":
+            received.set()
+            release.wait(timeout=2)
+
+    def run():
+        try:
+            SubprocessDockerRunner("bash").run(
+                ["-c", "printf 'step one\\n' >&2; printf 'fatal build failure\\n' >&2; exit 7"],
+                on_output=report,
+            )
+        except DockerCommandError as exc:
+            errors.append(exc)
+
+    thread = threading.Thread(target=run)
+    thread.start()
+    assert received.wait(timeout=1), "first progress line was not streamed"
+    assert thread.is_alive(), "runner waited for process exit before reporting progress"
+    release.set()
+    thread.join(timeout=2)
+
+    assert not thread.is_alive()
+    assert progress == ["step one", "fatal build failure"]
+    assert len(errors) == 1 and "fatal build failure" in str(errors[0])
+
+
 def test_creation_defaults_to_desktop_image_and_all_gpus(tmp_path):
     fake = FakeDocker(config(tmp_path, DEFAULT_IMAGE)); ws = Workstation(fake.config, fake, FakeInventory())
     result = ws.start()
@@ -119,6 +154,20 @@ def test_selected_gpu_is_persisted_by_uuid_and_replace_is_explicit(tmp_path):
         ws.start(image="test:image", all_gpus=False)
     ws.start(image="test:image", all_gpus=False, replace=True)
     assert ["rm", "robot-ws"] in fake.commands
+
+
+def test_multiple_selected_gpus_are_quoted_for_docker_csv_parsing(tmp_path):
+    fake = FakeDocker(config(tmp_path))
+    inventory = FakeInventory()
+    selected = (GPU("GPU-first", 0, "First GPU", 1024), GPU("GPU-second", 1, "Second GPU", 1024))
+    inventory.resolve_gpus = lambda values, all_gpus=False: selected
+    ws = Workstation(fake.config, fake, inventory)
+
+    result = ws.start(image="test:image", gpus=("GPU-first", "GPU-second"))
+
+    run = next(command for command in fake.commands if command[:2] == ["run", "-d"])
+    assert result.gpu_uuids == ("GPU-first", "GPU-second")
+    assert ["--gpus", '"device=GPU-first,GPU-second"'] == run[run.index("--gpus"):run.index("--gpus") + 2]
 
 
 def test_duplicate_gpu_is_rejected_before_container_creation(tmp_path):

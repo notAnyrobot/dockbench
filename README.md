@@ -51,6 +51,10 @@ uv run docker-ws image build --no-cache
 uv run docker-ws image verify android-ws:u22.04-cu12.8-v2
 ```
 
+Image builds use BuildKit's plain progress format. The CLI streams each line
+to the terminal immediately; Workbench shows the same sanitized progress in
+the live image job and retains a bounded recent log for long-running builds.
+
 `image build` leaves an existing container untouched. To build the image and
 replace the existing container so it immediately uses that image, run
 `uv run docker-ws image rebuild`. The replacement container keeps the host-mounted

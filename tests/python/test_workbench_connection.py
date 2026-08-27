@@ -38,6 +38,7 @@ def ready_connection(monkeypatch, process=None, *, available=True, health=True):
     monkeypatch.setattr(connection.shutil, "which", lambda name: "/usr/bin/ssh" if name == "ssh" else None)
     monkeypatch.setattr(connection, "_is_port_available", lambda port: available)
     monkeypatch.setattr(connection.subprocess, "Popen", lambda command: commands.append(command) or process)
+    monkeypatch.setattr(connection, "_tunnel_is_listening", lambda port: True)
     monkeypatch.setattr(connection, "_health_ready", lambda url: health)
     return process, commands
 
@@ -95,8 +96,44 @@ def test_health_requires_expected_json_payload(monkeypatch, status, body, expect
         def __exit__(self, *_):
             return False
 
-    monkeypatch.setattr(connection.urllib.request, "urlopen", lambda url, timeout: Response())
+    class Opener:
+        def open(self, url, timeout):
+            return Response()
+
+    monkeypatch.setattr(connection.urllib.request, "build_opener", lambda *handlers: Opener())
     assert connection._health_ready("http://127.0.0.1:8787") is expected
+
+
+def test_loopback_health_check_disables_environment_proxy_discovery(monkeypatch):
+    class Response:
+        status = 200
+
+        def read(self):
+            return b'{"status":"ok"}'
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_):
+            return False
+
+    class Opener:
+        def open(self, url, timeout):
+            assert url == "http://127.0.0.1:8787/api/health"
+            return Response()
+
+    proxy_arguments = []
+    monkeypatch.setenv("http_proxy", "http://proxy.invalid:8080")
+    monkeypatch.setenv("HTTP_PROXY", "http://proxy.invalid:8080")
+    monkeypatch.setattr(
+        connection.urllib.request,
+        "ProxyHandler",
+        lambda proxies: proxy_arguments.append(proxies) or object(),
+    )
+    monkeypatch.setattr(connection.urllib.request, "build_opener", lambda *handlers: Opener())
+
+    assert connection._health_ready("http://127.0.0.1:8787")
+    assert proxy_arguments == [{}]
 
 
 def test_default_busy_port_uses_ephemeral_port(monkeypatch):
@@ -131,17 +168,70 @@ def test_early_ssh_exit_is_reported_and_not_reterminated(monkeypatch):
     assert not process.terminated
 
 
-def test_health_timeout_explains_remote_deploy_and_cleans_up(monkeypatch):
+def test_health_timeout_starts_after_interactive_ssh_authentication(monkeypatch):
     process, _ = ready_connection(monkeypatch, health=False)
-    times = iter([0.0, 100.0])
-    monkeypatch.setattr(connection.time, "monotonic", lambda: next(times))
-    with pytest.raises(WorkstationError, match="workbench deploy"):
+    tunnel_checks = iter([False, True])
+    health_requests = []
+    now = 0.0
+
+    def monotonic():
+        return now
+
+    def sleep(_):
+        nonlocal now
+        now += connection.HEALTH_TIMEOUT_SECONDS + 1
+
+    monkeypatch.setattr(connection, "_tunnel_is_listening", lambda port: next(tunnel_checks))
+    monkeypatch.setattr(connection, "_health_ready", lambda url: health_requests.append(url) or False)
+    monkeypatch.setattr(connection.time, "monotonic", monotonic)
+    monkeypatch.setattr(connection.time, "sleep", sleep)
+
+    with pytest.raises(WorkstationError, match="did not answer through the local forward") as exc_info:
         connection.connect("gpu", open_browser=False)
+    assert "SSH tunnel to gpu is up" not in str(exc_info.value)
+    assert "workbench status" in str(exc_info.value)
+    assert health_requests == ["http://127.0.0.1:8787"]
     assert process.terminated and process.wait_calls == [5]
 
 
+def test_connect_keeps_health_budget_after_authentication_then_cleans_up(monkeypatch):
+    process, _ = ready_connection(monkeypatch, health=True)
+    tunnel_checks = iter([False, True])
+    now = 0.0
+    sleep_count = 0
+
+    def monotonic():
+        return now
+
+    def sleep(_):
+        nonlocal now, sleep_count
+        sleep_count += 1
+        now += connection.HEALTH_TIMEOUT_SECONDS + 1
+        if sleep_count == 2:
+            raise KeyboardInterrupt()
+
+    monkeypatch.setattr(connection, "_tunnel_is_listening", lambda port: next(tunnel_checks))
+    monkeypatch.setattr(connection.time, "monotonic", monotonic)
+    monkeypatch.setattr(connection.time, "sleep", sleep)
+
+    result = connection.connect("gpu", open_browser=False)
+
+    assert result.interrupted
+    assert process.terminated and process.wait_calls == [5]
+
+
+def test_ssh_exit_while_waiting_for_interactive_authentication_is_accurate(monkeypatch):
+    process, _ = ready_connection(monkeypatch, FakeProcess([23], returncode=23))
+    monkeypatch.setattr(connection, "_tunnel_is_listening", lambda port: False)
+
+    with pytest.raises(WorkstationError, match="exited before it became usable \\(exit code 23\\)"):
+        connection.connect("gpu", open_browser=False)
+
+    assert not process.terminated and process.wait_calls == []
+
+
 def test_unexpected_exit_after_readiness_is_reported(monkeypatch):
-    process, _ = ready_connection(monkeypatch, FakeProcess([None, 7], returncode=7))
+    process, _ = ready_connection(monkeypatch, FakeProcess([None, None, 7], returncode=7))
     with pytest.raises(WorkstationError, match=r"exited \(exit code 7\)"):
         connection.connect("gpu", open_browser=False)
     assert not process.terminated

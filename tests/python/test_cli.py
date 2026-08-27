@@ -1,3 +1,5 @@
+from types import SimpleNamespace
+
 import pytest
 
 from docker_ws.cli import main
@@ -106,6 +108,27 @@ def test_image_build_recipe_and_verification_options_dispatch(monkeypatch):
         ("build", ("custom",), {"tag": "custom:v2", "target": "desktop",
                                   "platform": "linux/arm64", "no_cache": True}),
         ("verify", ("custom:v2",)),
+    ]
+
+
+def test_image_build_streams_plain_progress_to_cli(monkeypatch, capsys):
+    recipe = SimpleNamespace(id="demo", manifest=SimpleNamespace(revision=2))
+
+    class Builder:
+        def __init__(self, docker): pass
+        def build(self, selected, **kwargs):
+            assert selected is recipe
+            kwargs.pop("on_progress")("#7 downloading packages")
+            return SimpleNamespace(tag="demo:v2")
+
+    monkeypatch.setattr(main, "_recipe_catalog", lambda: SimpleNamespace(get=lambda _id: recipe))
+    monkeypatch.setattr(main, "_docker_runner", lambda: object())
+    monkeypatch.setattr(main, "ImageBuilder", Builder)
+
+    assert main._build_recipe("demo") == 0
+    assert capsys.readouterr().out.splitlines() == [
+        "#7 downloading packages",
+        "demo:v2: image built from demo revision 2",
     ]
 
 

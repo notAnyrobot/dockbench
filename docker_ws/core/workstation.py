@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import contextlib
+from collections import deque
 import fcntl
 import json
 import os
@@ -13,7 +14,7 @@ import sys
 import time
 from dataclasses import asdict, dataclass, replace
 from pathlib import Path
-from typing import Iterable, Protocol
+from typing import Callable, Iterable, Protocol
 
 from docker_ws.core.defaults import DEFAULT_IMAGE, default_workspace
 from docker_ws.core.errors import DockerCommandError, WorkstationError, WorkstationGPUConflict, WorkstationRebuildRequired, WorkstationReplaceRequired
@@ -21,19 +22,56 @@ from docker_ws.core.host_inventory import HostInventory
 
 
 class DockerRunner(Protocol):
-    def run(self, args: list[str], *, input: str | None = None, capture: bool = False, check: bool = True) -> str: ...
+    def run(self, args: list[str], *, input: str | None = None, capture: bool = False,
+            check: bool = True, on_output: Callable[[str], None] | None = None) -> str: ...
 
 
 class SubprocessDockerRunner:
     """Docker adapter that never composes a shell command."""
     def __init__(self, command: str) -> None: self.command = command
-    def run(self, args: list[str], *, input: str | None = None, capture: bool = False, check: bool = True) -> str:
+    def run(self, args: list[str], *, input: str | None = None, capture: bool = False,
+            check: bool = True, on_output: Callable[[str], None] | None = None) -> str:
+        if on_output is not None:
+            if input is not None or capture:
+                raise WorkstationError("streamed Docker output cannot be combined with input or captured output")
+            return self._run_streamed(args, check=check, on_output=on_output)
         try:
             result = subprocess.run([self.command, *args], input=input, text=True, stdout=subprocess.PIPE if capture else None, stderr=subprocess.PIPE, check=False)
         except FileNotFoundError as exc: raise WorkstationError(f"Docker command not found: {self.command}") from exc
         if check and result.returncode:
             raise DockerCommandError((result.stderr or "").strip() or f"Docker command failed ({result.returncode})")
         return result.stdout.strip() if capture else ""
+
+    def _run_streamed(self, args: list[str], *, check: bool,
+                      on_output: Callable[[str], None]) -> str:
+        try:
+            process = subprocess.Popen(
+                [self.command, *args], text=True, stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT, bufsize=1,
+            )
+        except FileNotFoundError as exc:
+            raise WorkstationError(f"Docker command not found: {self.command}") from exc
+        tail: deque[str] = deque(maxlen=20)
+        try:
+            assert process.stdout is not None
+            for raw_line in process.stdout:
+                line = raw_line.rstrip("\r\n")
+                tail.append(line[-2000:])
+                on_output(line)
+            returncode = process.wait()
+        except BaseException:
+            if process.poll() is None:
+                process.terminate()
+                try:
+                    process.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    process.kill()
+                    process.wait(timeout=5)
+            raise
+        if check and returncode:
+            detail = "\n".join(tail).strip() or f"Docker command failed ({returncode})"
+            raise DockerCommandError(detail)
+        return ""
 
 
 @dataclass(frozen=True)
@@ -162,7 +200,14 @@ class Workstation:
         # Never force a platform for an arbitrary local image: Docker has
         # already resolved the image's locally available architecture.
         args = ["run", "-d", "--name", c.container_name, "--hostname", c.container_name, "--user", "root", "--shm-size", c.shm_size, "--restart", "unless-stopped", "--label", "docker-ws.managed=true", "--label", f"docker-ws.state-root={c.state_root}", "--label", f"docker-ws.launch-spec={spec.label_value()}", "--label", f"docker-ws.image-id={spec.image_id}", "--label", f"docker-ws.image-ref={spec.image_ref}", "--label", f"docker-ws.gpus={','.join(spec.gpu_uuids)}", "--label", f"robotics-ws.launch-config={c.launch_config}", "--mount", f"type=bind,src={c.workspace_root},dst=/workspace", "--mount", f"type=bind,src={c.state_root},dst=/state"]
-        if spec.gpu_uuids: args += ["--gpus", f"device={','.join(spec.gpu_uuids)}"]
+        if spec.gpu_uuids:
+            device_request = f"device={','.join(spec.gpu_uuids)}"
+            # Docker parses --gpus as CSV. Preserve literal double quotes when
+            # commas separate multiple device IDs; subprocess does not add the
+            # shell quoting shown in Docker's CLI examples for us.
+            if len(spec.gpu_uuids) > 1:
+                device_request = f'"{device_request}"'
+            args += ["--gpus", device_request]
         if spec.desktop_capable:
             # Fleet containers use Docker's ephemeral host ports.  This makes
             # several desktops possible without exposing VNC beyond loopback.
@@ -216,10 +261,11 @@ chown "$requested_uid:$requested_gid" /state/.robotics-ws-bashrc
             self._preflight(spec); self._create(spec)
             if spec.desktop_capable: self._prepare_user()
             return self.status()
-    def build(self) -> None:
+    def build(self, on_progress: Callable[[str], None] | None = None) -> None:
         image = self.config.image or DEFAULT_IMAGE
         recipe_dir = self.config.repository_root / "assets" / "images" / "android-ws"
-        self.docker.run(["buildx", "build", "--platform", "linux/amd64", "--file", str(recipe_dir / "Dockerfile.android-ws-v2"), "--target", "desktop", "--load", "--tag", image, str(recipe_dir)])
+        report = on_progress or (lambda line: print(line, flush=True))
+        self.docker.run(["buildx", "build", "--progress=plain", "--platform", "linux/amd64", "--file", str(recipe_dir / "Dockerfile.android-ws-v2"), "--target", "desktop", "--load", "--tag", image, str(recipe_dir)], on_output=report)
         print(f"{image}: image built")
     def rebuild(self) -> WorkstationStatus:
         self.build(); return self.start(image=self.config.image or DEFAULT_IMAGE, replace=True)

@@ -121,7 +121,9 @@ def _build_recipe(recipe_id: str, *, tag: str | None = None, target: str | None 
             overrides["target"] = target
         if platform is not None:
             overrides["platform"] = platform
-        result = ImageBuilder(_docker_runner()).build(recipe, **overrides)
+        result = ImageBuilder(_docker_runner()).build(
+            recipe, on_progress=lambda line: print(line, flush=True), **overrides,
+        )
         print(f"{result.tag}: image built from {recipe.id} revision {recipe.manifest.revision}")
         return 0
     except WorkstationError as exc:
