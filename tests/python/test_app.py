@@ -11,7 +11,7 @@ from dockbench.core.workstation import (
     WorkstationRebuildRequired,
     WorkstationStatus,
 )
-from dockbench.core.errors import WorkstationGPUConflict
+from dockbench.core.errors import WorkstationContainerExists, WorkstationGPUConflict
 from dockbench.core.errors import DockerCommandError
 from dockbench.web.app import DesktopSessions, _redact_image_log, create_app
 from dockbench.core.recipes import RecipeError
@@ -264,6 +264,59 @@ def test_gpu_reservation_conflict_is_a_safe_actionable_409_response():
     assert response.status_code == 409
     assert response.json()["code"] == "gpu_reserved"
     assert response.json()["message"] == "GPU GPU-a is reserved by running container alpha."
+
+
+def test_create_container_name_collision_is_a_safe_actionable_409_response(caplog):
+    class ExistingNameFleet(FakeFleet):
+        def create(self, name, image, gpu_uuids, all_gpus):
+            raise WorkstationContainerExists(name)
+
+    client = TestClient(create_app(FakeWorkstation(), fleet=ExistingNameFleet()))
+    token = client.get("/api/containers").json()["csrf_token"]
+
+    with caplog.at_level("WARNING", logger="dockbench.web.app"):
+        response = client.post(
+            "/api/containers",
+            json={"name": "workstation-8gpu", "image": "desktop:latest", "gpu_uuids": []},
+            headers={"origin": "http://testserver", "x-csrf-token": token},
+        )
+
+    assert response.status_code == 409
+    assert response.json()["code"] == "container_exists"
+    assert response.json()["message"] == (
+        "A Docker container named workstation-8gpu already exists. "
+        "Choose another name, or remove or rename the existing container before trying again."
+    )
+    correlation_id = response.json()["correlation_id"]
+    assert correlation_id in caplog.text
+    assert "container_exists" in caplog.text
+
+
+def test_unexpected_workstation_error_stays_redacted_but_logs_sanitized_diagnostic(caplog):
+    class FailingFleet(FakeFleet):
+        def create(self, name, image, gpu_uuids, all_gpus):
+            raise WorkstationError(
+                "Docker setup failed: token=private-token "
+                "Authorization: Bearer private-bearer path=/state/private"
+            )
+
+    client = TestClient(create_app(FakeWorkstation(), fleet=FailingFleet()))
+    token = client.get("/api/containers").json()["csrf_token"]
+
+    with caplog.at_level("WARNING", logger="dockbench.web.app"):
+        response = client.post(
+            "/api/containers",
+            json={"name": "workstation-8gpu", "image": "desktop:latest", "gpu_uuids": []},
+            headers={"origin": "http://testserver", "x-csrf-token": token},
+        )
+
+    assert response.status_code == 503
+    assert response.json()["message"] == "Dockbench is unavailable. Check its status and try again."
+    assert "private-token" not in response.text
+    assert "private-token" not in caplog.text
+    assert "private-bearer" not in caplog.text
+    assert "Docker setup failed" in caplog.text
+    assert "[PATH]" in caplog.text
 
 
 def test_orphaned_container_states_are_listed_for_explicit_cleanup():

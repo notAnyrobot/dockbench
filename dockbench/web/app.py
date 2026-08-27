@@ -26,7 +26,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from dockbench.core.defaults import DEFAULT_IMAGE
-from dockbench.core.errors import DockerCommandError
+from dockbench.core.errors import DockerCommandError, WorkstationContainerExists
 from dockbench.core.workstation import (
     Workstation,
     WorkstationError,
@@ -74,6 +74,9 @@ _SENSITIVE_LOG_VALUE = re.compile(r"(?i)\b(password|token|secret|authorization|c
 _SENSITIVE_DOCKER_VALUE = re.compile(
     r"(?i)\b(password|token|secret|authorization|cookie|credential|api[_-]?key)\b\s*([=:])\s*(?:\"[^\"]*\"|'[^']*'|[^\s,;]+)"
 )
+_SENSITIVE_AUTHORIZATION = re.compile(
+    r"(?i)\bauthorization\b\s*([=:])\s*(?:(?:bearer|basic)\s+)?[^\s,;]+"
+)
 _DOCKER_ERROR_PREFIX = re.compile(r"(?i)^(?:docker:\s*)?(?:error response from daemon:\s*)+")
 _ABSOLUTE_PATH = re.compile(r"(?<![\w.-])/(?:[^\s/'\"`]+/?)+")
 _ANSI_ESCAPE = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
@@ -93,6 +96,7 @@ def _safe_docker_error(value: str) -> str:
     """
     cause = _ANSI_ESCAPE.sub("", value)
     cause = _DOCKER_ERROR_PREFIX.sub("", " ".join(cause.split()))
+    cause = _SENSITIVE_AUTHORIZATION.sub(r"authorization\1[REDACTED]", cause)
     cause = _SENSITIVE_DOCKER_VALUE.sub(r"\1\2[REDACTED]", cause)
     cause = _ABSOLUTE_PATH.sub("[PATH]", cause).strip(" .")
     if not cause:
@@ -103,6 +107,18 @@ def _safe_docker_error(value: str) -> str:
         f"Docker could not complete the request: {cause}. "
         "Check that Docker is running and that the selected image and resources are available, then try again."
     )
+
+
+def _safe_diagnostic_detail(exc: Exception) -> str:
+    """Return a bounded, redacted exception summary suitable for server logs."""
+    detail = _ANSI_ESCAPE.sub("", str(exc))
+    detail = " ".join(detail.split())
+    detail = _SENSITIVE_AUTHORIZATION.sub(r"authorization\1[REDACTED]", detail)
+    detail = _SENSITIVE_DOCKER_VALUE.sub(r"\1\2[REDACTED]", detail)
+    detail = _ABSOLUTE_PATH.sub("[PATH]", detail).strip(" .")
+    if not detail:
+        return "no usable diagnostic detail"
+    return detail[:500]
 
 
 class SessionRequest(BaseModel):
@@ -207,45 +223,46 @@ class TerminalSessions:
 
 def safe_error(exc: Exception) -> JSONResponse:
     correlation_id = uuid.uuid4().hex
-    LOG.warning("dockbench request failed id=%s kind=%s", correlation_id, type(exc).__name__)
+    def response(status: int, code: str, message: str) -> JSONResponse:
+        LOG.warning(
+            "dockbench request failed id=%s code=%s kind=%s detail=%s",
+            correlation_id,
+            code,
+            type(exc).__name__,
+            _safe_diagnostic_detail(exc),
+        )
+        return JSONResponse(
+            status_code=status,
+            content={"code": code, "message": message, "correlation_id": correlation_id},
+        )
+
     if isinstance(exc, RecipeError):
         status = 409 if "already exists" in str(exc) else 422
-        return JSONResponse(status_code=status, content={"code": "invalid_recipe", "message": str(exc), "correlation_id": correlation_id})
+        return response(status, "invalid_recipe", str(exc))
+    if isinstance(exc, WorkstationContainerExists):
+        return response(
+            409,
+            "container_exists",
+            (
+                f"A Docker container named {exc.name} already exists. "
+                "Choose another name, or remove or rename the existing container before trying again."
+            ),
+        )
     if isinstance(exc, WorkstationReplaceRequired):
-        return JSONResponse(status_code=409, content={"code": "workstation_replace_required", "message": "The requested image or GPU selection differs. Replacing keeps host code roots and /state but discards the old container filesystem.", "correlation_id": correlation_id})
+        return response(409, "workstation_replace_required", "The requested image or GPU selection differs. Replacing keeps host code roots and /state but discards the old container filesystem.")
     if isinstance(exc, WorkstationRebuildRequired):
-        return JSONResponse(
-            status_code=409,
-            content={
-                "code": "workstation_rebuild_required",
-                "message": (
-                    "The workstation image or launch settings changed. Run "
-                    "`uv run dockbench image rebuild`, then try again."
-                ),
-                "correlation_id": correlation_id,
-            },
+        return response(
+            409,
+            "workstation_rebuild_required",
+            "The workstation image or launch settings changed. Run `uv run dockbench image rebuild`, then try again.",
         )
     if isinstance(exc, WorkstationGPUConflict):
-        return JSONResponse(
-            status_code=409,
-            content={
-                "code": "gpu_reserved",
-                "message": f"GPU {exc.gpu_uuid} is reserved by running container {exc.owner}.",
-                "correlation_id": correlation_id,
-            },
-        )
+        return response(409, "gpu_reserved", f"GPU {exc.gpu_uuid} is reserved by running container {exc.owner}.")
     if isinstance(exc, DockerCommandError):
-        return JSONResponse(
-            status_code=503,
-            content={
-                "code": "docker_error",
-                "message": _safe_docker_error(str(exc)),
-                "correlation_id": correlation_id,
-            },
-        )
+        return response(503, "docker_error", _safe_docker_error(str(exc)))
     if isinstance(exc, WorkstationError):
-        return JSONResponse(status_code=503, content={"code": "workstation_unavailable", "message": "Dockbench is unavailable. Check its status and try again.", "correlation_id": correlation_id})
-    return JSONResponse(status_code=500, content={"code": "internal_error", "message": "Dockbench could not complete the request.", "correlation_id": correlation_id})
+        return response(503, "workstation_unavailable", "Dockbench is unavailable. Check its status and try again.")
+    return response(500, "internal_error", "Dockbench could not complete the request.")
 
 
 def _origin_for(request: Request) -> str:

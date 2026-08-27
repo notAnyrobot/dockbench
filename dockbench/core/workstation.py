@@ -17,7 +17,7 @@ from pathlib import Path
 from typing import Callable, Iterable, Protocol
 
 from dockbench.core.defaults import DEFAULT_IMAGE, code_roots_from_json, default_code_roots, default_state_root
-from dockbench.core.errors import DockerCommandError, WorkstationError, WorkstationGPUConflict, WorkstationRebuildRequired, WorkstationReplaceRequired
+from dockbench.core.errors import DockerCommandError, WorkstationContainerExists, WorkstationError, WorkstationGPUConflict, WorkstationRebuildRequired, WorkstationReplaceRequired
 from dockbench.core.host_inventory import HostInventory
 
 
@@ -473,7 +473,7 @@ class FleetManager:
     def create(self, name: str, image: str, gpu_uuids: tuple[str, ...] = (), all_gpus: bool = False) -> WorkstationStatus:
         name = self._validate_name(name)
         with self.locked():
-            if self._exists(name): raise WorkstationError(f"container already exists: {name}")
+            if self._exists(name): raise WorkstationContainerExists(name)
             selected = self.host_inventory.resolve_gpus(gpu_uuids, all_gpus)
             self._ensure_gpus_available(tuple(gpu.uuid for gpu in selected))
             self._start_with_created_cleanup(name, image=image, gpus=tuple(gpu.uuid for gpu in selected), all_gpus=False)

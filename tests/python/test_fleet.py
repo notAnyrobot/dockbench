@@ -2,7 +2,7 @@ from pathlib import Path
 
 import pytest
 
-from dockbench.core.errors import WorkstationError
+from dockbench.core.errors import WorkstationContainerExists, WorkstationError
 from dockbench.core.host_inventory import GPU, LocalImage
 from dockbench.core.workstation import FleetManager, WorkstationConfig
 
@@ -111,6 +111,15 @@ def test_newly_created_named_container_is_discovered_by_docker_label(tmp_path):
     assert [item.container_name for item in fleet.containers()] == ["workstation-cpu-only"]
     listing = next(command for command in docker.commands if command[:2] == ["container", "ls"])
     assert listing[listing.index("--filter") + 1] == "label=io.github.notanyrobot.dockbench.managed=true"
+
+
+def test_fleet_reports_an_occupied_docker_name_as_a_typed_conflict(tmp_path):
+    docker = Docker()
+    docker.containers["workstation-8gpu"] = {"state": "exited", "spec": "", "managed": False}
+    fleet = FleetManager(config(tmp_path), docker, Inventory())
+
+    with pytest.raises(WorkstationContainerExists, match="container already exists: workstation-8gpu"):
+        fleet.create("workstation-8gpu", "demo:image")
 
 
 def test_fleet_removes_managed_created_container_after_failed_startup(tmp_path):

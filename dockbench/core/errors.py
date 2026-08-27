@@ -24,3 +24,11 @@ class WorkstationGPUConflict(WorkstationError):
         self.gpu_uuid = gpu_uuid
         self.owner = owner
         super().__init__(f"GPU {gpu_uuid} is reserved by running container {owner}")
+
+
+class WorkstationContainerExists(WorkstationError):
+    """A requested managed-container name is already occupied in Docker."""
+
+    def __init__(self, name: str) -> None:
+        self.name = name
+        super().__init__(f"container already exists: {name}")
