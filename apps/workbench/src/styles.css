@@ -111,3 +111,8 @@ tbody tr.selected{
 .column-resizer:hover,.column-resizer:focus,.row-resizer:hover,.row-resizer:focus{background:#76b900aa}
 *{scrollbar-color:#666 #161616}
 ::selection{background:var(--nv-green-dark);color:#fff}
+
+/* Keep xterm mounted while Activity is visible, then refit it on return. */
+.terminal-dock{grid-template-rows:47px minmax(0,1fr)}
+.terminal-pane{grid-row:2;min-height:0;display:grid;grid-template-rows:auto minmax(0,1fr)}
+.terminal-pane[hidden],.activity-log[hidden]{display:none}
