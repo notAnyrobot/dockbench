@@ -1,4 +1,5 @@
 from pathlib import Path
+import json
 import subprocess
 import threading
 
@@ -52,27 +53,28 @@ class FakeDocker:
 
 
 def config(tmp_path: Path, image=None):
-    code = tmp_path / "Code"; code.mkdir()
-    return WorkstationConfig(tmp_path, "docker", code, tmp_path / ".dockbench", "8g", 1234, 5678, "robot", image, "dockbench", 5901, "vncviewer", "rootful", 1234, 5678)
+    android = tmp_path / "android-ws"; github = tmp_path / "GitHub"
+    android.mkdir(); github.mkdir()
+    return WorkstationConfig(tmp_path, "docker", {"android-ws": android, "GitHub": github}, tmp_path / ".dockbench", "8g", 1234, 5678, "robot", image, "dockbench", 5901, "vncviewer", "rootful", 1234, 5678)
 
 
 @pytest.mark.parametrize(
     ("environment", "expected"),
-    [({"DOCKBENCH_WORKSPACE": "workspace"}, "workspace")],
+    [({"DOCKBENCH_CODE_ROOTS": {"android-ws": "android", "GitHub": "github"}}, {"android-ws": "android", "GitHub": "github"})],
 )
-def test_config_uses_dockbench_workspace_environment_only(tmp_path, monkeypatch, environment, expected):
-    for directory in {"workspace", "legacy"}:
+def test_config_uses_named_code_root_mapping(tmp_path, monkeypatch, environment, expected):
+    for directory in {"android", "github"}:
         (tmp_path / directory).mkdir()
-    monkeypatch.delenv("DOCKBENCH_WORKSPACE", raising=False)
-    monkeypatch.setenv("ROBOTICS_WS_CODE_ROOT", str(tmp_path / "legacy"))
+    monkeypatch.delenv("DOCKBENCH_CODE_ROOTS", raising=False)
     for name, value in environment.items():
-        monkeypatch.setenv(name, str(tmp_path / value))
+        monkeypatch.setenv(name, json.dumps({root: str(tmp_path / path) for root, path in value.items()}))
+    monkeypatch.setenv("DOCKBENCH_STATE_ROOT", str(tmp_path / ".dockbench"))
     monkeypatch.setattr("dockbench.core.workstation.shutil.which", lambda command: f"/usr/bin/{command}")
     monkeypatch.setattr("dockbench.core.workstation.SubprocessDockerRunner.run", lambda *args, **kwargs: "[]")
 
     result = WorkstationConfig.from_environment(tmp_path)
 
-    assert result.workspace_root == tmp_path / expected
+    assert result.code_roots == {root: tmp_path / path for root, path in expected.items()}
     assert result.state_root == tmp_path / ".dockbench"
     assert result.container_name == "dockbench"
 
@@ -80,15 +82,15 @@ def test_config_uses_dockbench_workspace_environment_only(tmp_path, monkeypatch,
 def test_config_ignores_the_former_workspace_environment(tmp_path, monkeypatch):
     fallback = tmp_path / "fallback"
     fallback.mkdir()
-    monkeypatch.delenv("DOCKBENCH_WORKSPACE", raising=False)
-    monkeypatch.setenv("ROBOTICS_WS_CODE_ROOT", str(tmp_path / "ignored"))
-    monkeypatch.setattr("dockbench.core.workstation.default_workspace", lambda: fallback)
+    monkeypatch.delenv("DOCKBENCH_CODE_ROOTS", raising=False)
+    monkeypatch.setenv("DOCKBENCH_WORKSPACE", str(tmp_path / "ignored"))
+    monkeypatch.setattr("dockbench.core.workstation.default_code_roots", lambda: {"android-ws": fallback})
     monkeypatch.setattr("dockbench.core.workstation.shutil.which", lambda command: f"/usr/bin/{command}")
     monkeypatch.setattr("dockbench.core.workstation.SubprocessDockerRunner.run", lambda *args, **kwargs: "[]")
 
     result = WorkstationConfig.from_environment(tmp_path)
 
-    assert result.workspace_root == fallback
+    assert result.code_roots == {"android-ws": fallback}
 
 
 def test_docker_runner_retains_daemon_stderr_for_sanitized_workbench_errors(monkeypatch):
@@ -147,7 +149,9 @@ def test_creation_defaults_to_desktop_image_and_all_gpus(tmp_path):
     assert ["--gpus", "device=GPU-abc"] == command[command.index("--gpus"):command.index("--gpus") + 2]
     assert ["--user", "root"] == command[command.index("--user"):command.index("--user") + 2]
     assert command[-3:] == ["sha256:image", "-lc", "exec sleep infinity"]
-    assert "--entrypoint" in command and any("dst=/workspace" in item for item in command)
+    assert "--entrypoint" in command
+    assert any("dst=/workspace/android-ws" in item for item in command)
+    assert any("dst=/workspace/GitHub" in item for item in command)
 
 
 def test_creation_can_explicitly_select_cpu_only(tmp_path):

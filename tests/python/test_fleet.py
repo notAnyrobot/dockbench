@@ -59,8 +59,9 @@ class Docker:
 
 
 def config(tmp_path: Path):
-    code = tmp_path / "Code"; code.mkdir()
-    return WorkstationConfig(tmp_path, "docker", code, tmp_path / ".dockbench", "1g", 1, 1, "user", "demo:image", "dockbench", 5901, "vncviewer", "rootful", 1, 1)
+    android = tmp_path / "android-ws"; github = tmp_path / "GitHub"
+    android.mkdir(); github.mkdir()
+    return WorkstationConfig(tmp_path, "docker", {"android-ws": android, "GitHub": github}, tmp_path / ".dockbench", "1g", 1, 1, "user", "demo:image", "dockbench", 5901, "vncviewer", "rootful", 1, 1)
 
 
 def test_fleet_ignores_old_containers_and_labels(tmp_path):

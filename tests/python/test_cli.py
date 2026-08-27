@@ -1,4 +1,5 @@
 from types import SimpleNamespace
+from pathlib import Path
 
 import pytest
 
@@ -29,7 +30,8 @@ def test_server_and_top_level_deploy_connect_serve_dispatch(monkeypatch):
     monkeypatch.setattr(main, "_serve", lambda *args: calls.append(("serve", args)) or 0)
     monkeypatch.setattr(main, "_server_status", lambda *args: calls.append(("server", args)) or 0)
 
-    assert main.main(["deploy", "--port", "9001", "--workspace", "/workspace",
+    assert main.main(["deploy", "--port", "9001", "--code-root", "GitHub=/workspace",
+                      "--code-root", "src=/source",
                       "--state-root", "/state", "--docker-command", "podman"]) == 0
     assert main.main(["connect", "hpc", "--local-port", "9002", "--remote-port", "9001"]) == 0
     assert main.main(["serve", "--port", "9003", "--config", "/tmp/server.json"]) == 0
@@ -37,7 +39,7 @@ def test_server_and_top_level_deploy_connect_serve_dispatch(monkeypatch):
     assert main.main(["server", "status"]) == 0
     assert main.main(["server", "stop"]) == 0
     assert calls == [
-        ("deploy", (9001, "/workspace", "/state", "podman")),
+        ("deploy", (9001, [("GitHub", Path("/workspace")), ("src", Path("/source"))], "/state", "podman")),
         ("connect", ("hpc", 9002, 9001, False)),
         ("serve", (9003, "/tmp/server.json")),
         ("server", ("start",)), ("server", ("status",)), ("server", ("stop",)),
@@ -100,3 +102,24 @@ def test_image_build_streams_plain_progress_to_cli(monkeypatch, capsys):
 def test_server_ports_are_validated_by_parser():
     with pytest.raises(SystemExit):
         main.parser().parse_args(["connect", "hpc", "--remote-port", "70000"])
+
+
+@pytest.mark.parametrize("value", ["", "name", "=path", ".=/path", "..=/path", "bad/name=/path"])
+def test_code_root_parser_rejects_invalid_names(value):
+    with pytest.raises(SystemExit):
+        main.parser().parse_args(["deploy", "--code-root", value])
+
+
+def test_code_root_parser_rejects_duplicate_names():
+    with pytest.raises(SystemExit):
+        main.parser().parse_args(["deploy", "--code-root", "GitHub=/one", "--code-root", "GitHub=/two"])
+
+
+def test_code_root_parser_preserves_name_and_expands_path():
+    selected = main.parser().parse_args(
+        ["deploy", "--code-root", "GitHub=/workspace/GitHub", "--code-root", "1.root=~/root"]
+    )
+    assert selected.code_root == [
+        ("GitHub", Path("/workspace/GitHub")),
+        ("1.root", Path("~/root").expanduser()),
+    ]

@@ -38,8 +38,8 @@ recipe, replaces the default managed container, and starts it again:
 uv run dockbench image rebuild
 ```
 
-The replacement retains the host-mounted `/workspace` projects and `.dockbench`
-state, but discards changes made only in the old container filesystem.
+The replacement retains host-mounted code roots and `.dockbench` state, but
+discards changes made only in the old container filesystem.
 
 Use Docker directly for general inventory:
 
@@ -63,13 +63,27 @@ uv run dockbench stop
 The default launch uses `android-ws:u22.04-cu12.8-v2` and all reported GPUs.
 Use `--gpu none` for CPU-only operation, or repeat `--gpu` to select a subset.
 A running managed container is immutable: changing image or GPU selection
-requires `--replace`, which retains `/workspace` and `/state` but discards its
-container filesystem. Containers run as root, so files created in `/workspace`
+requires `--replace`, which retains code roots and `/state` but discards its
+container filesystem. Containers run as root, so files created in a code root
 may become root-owned on the host.
 
-By default, Dockbench mounts the host `~/workspace` at `/workspace`. On hosts
-with `/data/$USER`, it instead uses `/data/$USER/workspace`. Set
-`DOCKBENCH_WORKSPACE` to choose another existing host directory.
+Dockbench mounts each named code root at `/workspace/<name>`. Its defaults are
+`~/android-ws` and `~/GitHub` locally, and `/data/$USER/android-ws` and
+`/data/$USER/GitHub` on remote hosts with a per-user `/data/$USER` directory.
+Those roots appear in the container as `/workspace/android-ws` and
+`/workspace/GitHub`.
+
+Override local roots with the JSON-object `DOCKBENCH_CODE_ROOTS` environment
+variable. For a remote deployment, repeat `--code-root NAME=PATH`:
+
+```bash
+export DOCKBENCH_CODE_ROOTS="{\"android-ws\":\"$HOME/android-ws\",\"GitHub\":\"$HOME/GitHub\"}"
+uv run dockbench start
+uv run dockbench deploy \
+  --code-root android-ws=/data/$USER/android-ws \
+  --code-root GitHub=/data/$USER/GitHub
+```
+
 `DOCKBENCH_VNC_PASSWORD` is used only while provisioning a VNC password; never
 store it in this repository. The desktop image advertises desktop contract
 `v1`; shell-only images can still be used with `dockbench shell`.

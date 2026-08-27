@@ -16,7 +16,7 @@ from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 from typing import Callable, Iterable, Protocol
 
-from dockbench.core.defaults import DEFAULT_IMAGE, default_workspace
+from dockbench.core.defaults import DEFAULT_IMAGE, code_roots_from_json, default_code_roots, default_state_root
 from dockbench.core.errors import DockerCommandError, WorkstationError, WorkstationGPUConflict, WorkstationRebuildRequired, WorkstationReplaceRequired
 from dockbench.core.host_inventory import HostInventory
 
@@ -76,25 +76,26 @@ class SubprocessDockerRunner:
 
 @dataclass(frozen=True)
 class WorkstationConfig:
-    repository_root: Path; docker_command: str; workspace_root: Path; state_root: Path; shm_size: str
+    repository_root: Path; docker_command: str; code_roots: dict[str, Path]; state_root: Path; shm_size: str
     host_uid: int; host_gid: int; host_user: str; image: str | None; container_name: str
     vnc_port: int; vncviewer_command: str; docker_mode: str; container_uid: int; container_gid: int
     dynamic_vnc_port: bool = False
     @property
-    def launch_config(self) -> str: return "|".join((str(self.workspace_root), str(self.state_root), self.shm_size, str(self.host_uid), str(self.host_gid), self.docker_mode, str(self.vnc_port)))
+    def launch_config(self) -> str: return json.dumps({"code_roots": {name: str(path) for name, path in sorted(self.code_roots.items())}, "state_root": str(self.state_root), "shm_size": self.shm_size, "host_uid": self.host_uid, "host_gid": self.host_gid, "docker_mode": self.docker_mode, "vnc_port": self.vnc_port}, separators=(",", ":"), sort_keys=True)
     @classmethod
     def from_environment(cls, repository_root: Path | None = None) -> "WorkstationConfig":
         env = os.environ; root = repository_root or Path(__file__).resolve().parents[2]
-        workspace_value = env.get("DOCKBENCH_WORKSPACE")
-        workspace_root = Path(workspace_value).expanduser().resolve() if workspace_value else default_workspace()
-        state_root = Path(env.get("DOCKBENCH_STATE_ROOT", str(workspace_root.parent / ".dockbench"))).expanduser(); port = env.get("DOCKBENCH_VNC_PORT", "5901")
+        roots_value = env.get("DOCKBENCH_CODE_ROOTS")
+        code_roots = code_roots_from_json(roots_value) if roots_value else default_code_roots()
+        if not code_roots:
+            raise WorkstationError("no code roots found; create ~/android-ws or ~/GitHub, or set DOCKBENCH_CODE_ROOTS")
+        state_root = Path(env.get("DOCKBENCH_STATE_ROOT", str(default_state_root()))).expanduser(); port = env.get("DOCKBENCH_VNC_PORT", "5901")
         if not re.fullmatch(r"[1-9][0-9]*", port): raise WorkstationError(f"VNC port must be a positive integer: {port}")
         docker = env.get("DOCKBENCH_DOCKER", "docker")
         if shutil.which(docker) is None: raise WorkstationError(f"Docker command not found: {docker}")
-        if not workspace_root.is_dir(): raise WorkstationError(f"workspace does not exist: {workspace_root}")
         security = SubprocessDockerRunner(docker).run(["info", "--format", "{{json .SecurityOptions}}"], capture=True); rootless = "rootless" in security
         uid = int(env.get("DOCKBENCH_HOST_UID", str(os.getuid()))); gid = int(env.get("DOCKBENCH_HOST_GID", str(os.getgid())))
-        return cls(root, docker, workspace_root, state_root, env.get("DOCKBENCH_SHM_SIZE", "32g"), uid, gid, env.get("DOCKBENCH_HOST_USER", "user"), env.get("DOCKBENCH_IMAGE", DEFAULT_IMAGE), env.get("DOCKBENCH_CONTAINER", "dockbench"), int(port), env.get("DOCKBENCH_VNC_VIEWER", "vncviewer"), "rootless" if rootless else "rootful", 0 if rootless else uid, 0 if rootless else gid)
+        return cls(root, docker, code_roots, state_root, env.get("DOCKBENCH_SHM_SIZE", "32g"), uid, gid, env.get("DOCKBENCH_HOST_USER", "user"), env.get("DOCKBENCH_IMAGE", DEFAULT_IMAGE), env.get("DOCKBENCH_CONTAINER", "dockbench"), int(port), env.get("DOCKBENCH_VNC_VIEWER", "vncviewer"), "rootless" if rootless else "rootful", 0 if rootless else uid, 0 if rootless else gid)
 
 
 @dataclass(frozen=True)
@@ -158,7 +159,10 @@ class Workstation:
         c = self.config; c.state_root.mkdir(parents=True, exist_ok=True)
         # Never force a platform for an arbitrary local image: Docker has
         # already resolved the image's locally available architecture.
-        args = ["run", "-d", "--name", c.container_name, "--hostname", c.container_name, "--user", "root", "--shm-size", c.shm_size, "--restart", "unless-stopped", "--label", "io.github.notanyrobot.dockbench.managed=true", "--label", f"io.github.notanyrobot.dockbench.state-root={c.state_root}", "--label", f"io.github.notanyrobot.dockbench.launch-spec={spec.label_value()}", "--label", f"io.github.notanyrobot.dockbench.image-id={spec.image_id}", "--label", f"io.github.notanyrobot.dockbench.image-ref={spec.image_ref}", "--label", f"io.github.notanyrobot.dockbench.gpus={','.join(spec.gpu_uuids)}", "--label", f"io.github.notanyrobot.dockbench.launch-config={c.launch_config}", "--mount", f"type=bind,src={c.workspace_root},dst=/workspace", "--mount", f"type=bind,src={c.state_root},dst=/state"]
+        args = ["run", "-d", "--name", c.container_name, "--hostname", c.container_name, "--user", "root", "--shm-size", c.shm_size, "--restart", "unless-stopped", "--label", "io.github.notanyrobot.dockbench.managed=true", "--label", f"io.github.notanyrobot.dockbench.state-root={c.state_root}", "--label", f"io.github.notanyrobot.dockbench.launch-spec={spec.label_value()}", "--label", f"io.github.notanyrobot.dockbench.image-id={spec.image_id}", "--label", f"io.github.notanyrobot.dockbench.image-ref={spec.image_ref}", "--label", f"io.github.notanyrobot.dockbench.gpus={','.join(spec.gpu_uuids)}", "--label", f"io.github.notanyrobot.dockbench.launch-config={c.launch_config}"]
+        for name, path in sorted(c.code_roots.items()):
+            args.extend(["--mount", f"type=bind,src={path},dst=/workspace/{name}"])
+        args.extend(["--mount", f"type=bind,src={c.state_root},dst=/state"])
         if spec.gpu_uuids:
             device_request = f"device={','.join(spec.gpu_uuids)}"
             # Docker parses --gpus as CSV. Preserve literal double quotes when

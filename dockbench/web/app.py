@@ -212,7 +212,7 @@ def safe_error(exc: Exception) -> JSONResponse:
         status = 409 if "already exists" in str(exc) else 422
         return JSONResponse(status_code=status, content={"code": "invalid_recipe", "message": str(exc), "correlation_id": correlation_id})
     if isinstance(exc, WorkstationReplaceRequired):
-        return JSONResponse(status_code=409, content={"code": "workstation_replace_required", "message": "The requested image or GPU selection differs. Replacing keeps /workspace and /state but discards the old container filesystem.", "correlation_id": correlation_id})
+        return JSONResponse(status_code=409, content={"code": "workstation_replace_required", "message": "The requested image or GPU selection differs. Replacing keeps host code roots and /state but discards the old container filesystem.", "correlation_id": correlation_id})
     if isinstance(exc, WorkstationRebuildRequired):
         return JSONResponse(
             status_code=409,
