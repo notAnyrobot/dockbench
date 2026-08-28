@@ -59,9 +59,9 @@ class Docker:
 
 
 def config(tmp_path: Path):
-    android = tmp_path / "android-ws"; github = tmp_path / "GitHub"
-    android.mkdir(); github.mkdir()
-    return WorkstationConfig(tmp_path, "docker", {"android-ws": android, "GitHub": github}, tmp_path / ".dockbench", "1g", 1, 1, "user", "demo:image", "dockbench", 5901, "vncviewer", "rootful", 1, 1)
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    return WorkstationConfig(tmp_path, "docker", workspace, tmp_path / ".dockbench", "1g", 1, 1, "user", "demo:image", "dockbench", 5901, "vncviewer", "rootful", 1, 1)
 
 
 def test_fleet_ignores_old_containers_and_labels(tmp_path):
@@ -111,6 +111,24 @@ def test_newly_created_named_container_is_discovered_by_docker_label(tmp_path):
     assert [item.container_name for item in fleet.containers()] == ["workstation-cpu-only"]
     listing = next(command for command in docker.commands if command[:2] == ["container", "ls"])
     assert listing[listing.index("--filter") + 1] == "label=io.github.notanyrobot.dockbench.managed=true"
+
+
+def test_container_can_override_the_default_code_root(tmp_path):
+    docker = Docker(); fleet = FleetManager(config(tmp_path), docker, Inventory())
+    custom = tmp_path / "custom-code"
+    custom.mkdir()
+
+    fleet.create("custom-root", "demo:image", workspace_root=str(custom))
+
+    run = next(command for command in docker.commands if command[:2] == ["run", "-d"])
+    assert f"type=bind,src={custom},dst=/workspace" in run
+
+
+def test_container_rejects_a_missing_custom_code_root(tmp_path):
+    fleet = FleetManager(config(tmp_path), Docker(), Inventory())
+
+    with pytest.raises(WorkstationError, match="workspace root does not exist"):
+        fleet.create("custom-root", "demo:image", workspace_root=str(tmp_path / "missing"))
 
 
 def test_fleet_reports_an_occupied_docker_name_as_a_typed_conflict(tmp_path):

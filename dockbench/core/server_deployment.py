@@ -18,7 +18,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Mapping
 
-from dockbench.core.defaults import code_roots_from_json, default_code_roots
+from dockbench.core.defaults import default_workspace_root, workspace_root_from_value
 from dockbench.core.errors import WorkstationError
 
 
@@ -27,7 +27,7 @@ class DeploymentError(WorkstationError):
 
 
 _RUNTIME_ENVIRONMENT = frozenset({
-    "DOCKBENCH_CODE_ROOTS", "DOCKBENCH_STATE_ROOT", "DOCKBENCH_DOCKER",
+    "DOCKBENCH_WORKSPACE", "DOCKBENCH_STATE_ROOT", "DOCKBENCH_DOCKER",
     "DOCKBENCH_VNC_PORT", "DOCKBENCH_SHM_SIZE",
     "DOCKBENCH_HOST_UID", "DOCKBENCH_HOST_GID", "DOCKBENCH_HOST_USER",
     "DOCKBENCH_IMAGE", "DOCKBENCH_CONTAINER", "DOCKBENCH_VNC_VIEWER",
@@ -45,7 +45,7 @@ class DeploymentOptions:
 
     repository_root: Path
     port: int = 8787
-    code_roots: tuple[tuple[str, Path], ...] = ()
+    workspace_root: Path | None = None
     state_root: Path | None = None
     docker_command: str | None = None
     config_home: Path | None = None
@@ -108,7 +108,7 @@ class ServerDeployment:
         if not 1 <= options.port <= 65535:
             raise DeploymentError("Dockbench port must be between 1 and 65535")
         self.options = DeploymentOptions(
-            repository_root=root, port=options.port, code_roots=options.code_roots,
+            repository_root=root, port=options.port, workspace_root=options.workspace_root,
             state_root=options.state_root, docker_command=options.docker_command,
             config_home=options.config_home, state_home=options.state_home,
             health_timeout_seconds=options.health_timeout_seconds,
@@ -128,39 +128,19 @@ class ServerDeployment:
 
     def _snapshot_environment(self) -> dict[str, str]:
         environment = {key: os.environ[key] for key in _RUNTIME_ENVIRONMENT if key in os.environ}
-        configured_roots = environment.get("DOCKBENCH_CODE_ROOTS")
-        if self.options.code_roots:
-            selected_roots = self.options.code_roots
-        elif configured_roots:
-            try:
-                selected_roots = tuple(code_roots_from_json(configured_roots).items())
-            except WorkstationError as exc:
-                raise DeploymentError(str(exc)) from exc
-        else:
-            selected_roots = tuple(default_code_roots().items())
-        raw_roots: dict[str, str] = {}
-        for name, path in selected_roots:
-            if not name or name in raw_roots:
-                raise DeploymentError(f"duplicate or empty code root name: {name!r}")
-            if name in {".", ".."}:
-                raise DeploymentError(f"invalid code root name: {name!r}")
-            root = path.expanduser().resolve()
-            if not root.is_dir():
-                raise DeploymentError(
-                    f"code root {name!r} does not exist: {root}; "
-                    "create it or pass --code-root NAME=PATH"
-                )
-            raw_roots[name] = str(root)
+        configured_root = environment.get("DOCKBENCH_WORKSPACE")
         try:
-            code_roots = code_roots_from_json(json.dumps(raw_roots, sort_keys=True))
+            if self.options.workspace_root is not None:
+                workspace_root = workspace_root_from_value(str(self.options.workspace_root))
+            elif configured_root:
+                workspace_root = workspace_root_from_value(configured_root)
+            else:
+                workspace_root = default_workspace_root()
         except WorkstationError as exc:
-            raise DeploymentError(
-                f"{exc}; create it or pass --code-root NAME=PATH"
-            ) from exc
-        environment["DOCKBENCH_CODE_ROOTS"] = json.dumps(
-            {name: str(path) for name, path in code_roots.items()},
-            sort_keys=True,
-        )
+            raise DeploymentError(f"{exc}; create it or pass --workspace PATH") from exc
+        if workspace_root is None:
+            raise DeploymentError("workspace root not found; create /data/$USER/workspace or pass --workspace PATH")
+        environment["DOCKBENCH_WORKSPACE"] = str(workspace_root)
         if self.options.state_root is not None:
             environment["DOCKBENCH_STATE_ROOT"] = str(self.options.state_root.expanduser())
         if self.options.docker_command is not None:

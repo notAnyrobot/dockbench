@@ -29,10 +29,9 @@ grep -F 'FROM core AS desktop' assets/images/android-ws/Dockerfile.android-ws-v2
 ! grep -F 'start-vnc' assets/images/android-ws/Dockerfile.android-ws-v2 >/dev/null
 grep -F 'WORKDIR /workspace' assets/images/android-ws/Dockerfile.android-ws-v2 >/dev/null
 grep -F 'Dockerfile.android-ws-v2' dockbench/core/workstation.py >/dev/null
-grep -F 'dst=/workspace/' dockbench/core/workstation.py >/dev/null
-grep -F 'DOCKBENCH_CODE_ROOTS' dockbench/core/workstation.py >/dev/null
-grep -F -- '--code-root' dockbench/cli/main.py >/dev/null
-! grep -F -- '--workspace' dockbench/cli/main.py >/dev/null
+grep -F 'dst=/workspace' dockbench/core/workstation.py >/dev/null
+grep -F 'DOCKBENCH_WORKSPACE' dockbench/core/workstation.py >/dev/null
+grep -F -- '--workspace' dockbench/cli/main.py >/dev/null
 grep -F 'apps" / "workbench" / "dist' dockbench/web/app.py >/dev/null
 grep -F 'dockbench serve' assets/systemd/dockbench.service >/dev/null
 grep -F '__UV_EXECUTABLE__' assets/systemd/dockbench.service >/dev/null

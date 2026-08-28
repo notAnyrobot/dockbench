@@ -11,7 +11,7 @@ from dockbench.core.workstation import (
     WorkstationRebuildRequired,
     WorkstationStatus,
 )
-from dockbench.core.errors import WorkstationContainerExists, WorkstationGPUConflict
+from dockbench.core.errors import WorkstationContainerExists, WorkstationGPUConflict, WorkspaceRootError
 from dockbench.core.errors import DockerCommandError
 from dockbench.web.app import DesktopSessions, _redact_image_log, create_app
 from dockbench.core.recipes import RecipeError
@@ -32,12 +32,13 @@ class FakeWorkstation:
 class FakeFleet:
     def __init__(self):
         self.created = None
+        self.config = type("Config", (), {"workspace_root": "/data/atom7/workspace"})()
         self.items = [WorkstationStatus("running", False, "desktop", "alpha", "/workspace", image_id="sha256:one", image_ref="desktop:latest", gpu_uuids=("GPU-a",), desktop_capable=True)]
 
     def containers(self): return tuple(self.items)
     def container(self, name): return next(item for item in self.items if item.container_name == name)
-    def create(self, name, image, gpu_uuids, all_gpus):
-        self.created = (name, image, gpu_uuids, all_gpus)
+    def create(self, name, image, gpu_uuids, all_gpus, workspace_root=None):
+        self.created = (name, image, gpu_uuids, all_gpus, workspace_root)
         return WorkstationStatus("running", False, image, name, "/workspace", image_id="sha256:new", image_ref=image, gpu_uuids=gpu_uuids)
     def start(self, name): return self.container(name)
     def stop(self, name): return WorkstationStatus("stopped", False, "desktop", name, "/workspace")
@@ -228,9 +229,14 @@ def test_fleet_inventory_and_container_lifecycle_routes_are_scoped_and_csrf_prot
 
     inventory = client.get("/api/host/inventory")
     assert inventory.json()["gpus"][0]["owner"] == "alpha"
+    assert inventory.json()["workspace_root"] == "/data/atom7/workspace"
     created = client.post("/api/containers", json={"name": "beta", "image": "ubuntu:24.04", "gpu_uuids": []}, headers=headers)
     assert created.status_code == 200
-    assert fleet.created == ("beta", "ubuntu:24.04", (), False)
+    assert fleet.created == ("beta", "ubuntu:24.04", (), False, None)
+
+    custom = client.post("/api/containers", json={"name": "gamma", "image": "ubuntu:24.04", "gpu_uuids": [], "workspace_root": "/custom/code"}, headers=headers)
+    assert custom.status_code == 200
+    assert fleet.created == ("gamma", "ubuntu:24.04", (), False, "/custom/code")
     removed = client.post("/api/containers/alpha/remove", headers=headers)
     assert removed.json() == {"removed": True, "name": "alpha"}
     assert fleet.removed == "alpha"
@@ -251,7 +257,7 @@ def test_csrf_token_remains_valid_when_another_dockbench_tab_initializes():
 
 def test_gpu_reservation_conflict_is_a_safe_actionable_409_response():
     class ConflictedFleet(FakeFleet):
-        def create(self, name, image, gpu_uuids, all_gpus):
+        def create(self, name, image, gpu_uuids, all_gpus, workspace_root=None):
             raise WorkstationGPUConflict("GPU-a", "alpha")
 
     client = TestClient(create_app(FakeWorkstation(), fleet=ConflictedFleet()))
@@ -266,9 +272,27 @@ def test_gpu_reservation_conflict_is_a_safe_actionable_409_response():
     assert response.json()["message"] == "GPU GPU-a is reserved by running container alpha."
 
 
+def test_invalid_custom_code_root_is_an_actionable_422_response():
+    class InvalidWorkspaceFleet(FakeFleet):
+        def create(self, name, image, gpu_uuids, all_gpus, workspace_root=None):
+            raise WorkspaceRootError(f"workspace root does not exist: {workspace_root}")
+
+    client = TestClient(create_app(FakeWorkstation(), fleet=InvalidWorkspaceFleet()))
+    token = client.get("/api/containers").json()["csrf_token"]
+    response = client.post(
+        "/api/containers",
+        json={"name": "beta", "image": "desktop:latest", "workspace_root": "/missing"},
+        headers={"origin": "http://testserver", "x-csrf-token": token},
+    )
+
+    assert response.status_code == 422
+    assert response.json()["code"] == "invalid_workspace_root"
+    assert response.json()["message"] == "The selected workspace root does not exist or is not a directory."
+
+
 def test_create_container_name_collision_is_a_safe_actionable_409_response(caplog):
     class ExistingNameFleet(FakeFleet):
-        def create(self, name, image, gpu_uuids, all_gpus):
+        def create(self, name, image, gpu_uuids, all_gpus, workspace_root=None):
             raise WorkstationContainerExists(name)
 
     client = TestClient(create_app(FakeWorkstation(), fleet=ExistingNameFleet()))
@@ -294,7 +318,7 @@ def test_create_container_name_collision_is_a_safe_actionable_409_response(caplo
 
 def test_unexpected_workstation_error_stays_redacted_but_logs_sanitized_diagnostic(caplog):
     class FailingFleet(FakeFleet):
-        def create(self, name, image, gpu_uuids, all_gpus):
+        def create(self, name, image, gpu_uuids, all_gpus, workspace_root=None):
             raise WorkstationError(
                 "Docker setup failed: token=private-token "
                 "Authorization: Bearer private-bearer path=/state/private"

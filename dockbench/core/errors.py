@@ -5,6 +5,10 @@ class WorkstationError(RuntimeError):
     """An expected, safe-to-display workstation failure."""
 
 
+class WorkspaceRootError(WorkstationError):
+    """A requested workspace root cannot be mounted."""
+
+
 class DockerCommandError(WorkstationError):
     """A Docker CLI failure whose daemon detail must be sanitized for the UI."""
 

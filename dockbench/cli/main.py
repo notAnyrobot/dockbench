@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import argparse
 import os
-import re
 import subprocess
 import sys
 from pathlib import Path
@@ -96,21 +95,21 @@ def _verify_image(image: str) -> int:
         return _fail(str(exc))
 
 
-def _deployment(port: int = DEFAULT_SERVER_PORT, code_roots: list[tuple[str, Path]] | None = None,
+def _deployment(port: int = DEFAULT_SERVER_PORT, workspace_root: str | None = None,
                 state_root: str | None = None, docker_command: str | None = None) -> ServerDeployment:
     return ServerDeployment(DeploymentOptions(
         repository_root=REPOSITORY_ROOT, port=port,
-        code_roots=tuple(code_roots or ()),
+        workspace_root=Path(workspace_root).expanduser() if workspace_root else None,
         state_root=Path(state_root).expanduser() if state_root else None,
         docker_command=docker_command,
     ))
 
 
-def _deploy(port: int = DEFAULT_SERVER_PORT, code_roots: list[tuple[str, Path]] | None = None,
+def _deploy(port: int = DEFAULT_SERVER_PORT, workspace_root: str | None = None,
             state_root: str | None = None, docker_command: str | None = None) -> int:
     try:
         print("Building and deploying Dockbench…")
-        result = _deployment(port, code_roots, state_root, docker_command).deploy()
+        result = _deployment(port, workspace_root, state_root, docker_command).deploy()
         print(f"Dockbench deployed with {result.manager}: {result.url}")
         if result.log_path:
             print(f"Log: {result.log_path}")
@@ -168,35 +167,13 @@ def _port(value: str) -> int:
     return port
 
 
-def _code_root(value: str) -> tuple[str, Path]:
-    name, separator, raw_path = value.partition("=")
-    name = name.strip()
-    if not separator or not name or not raw_path.strip():
-        raise argparse.ArgumentTypeError("code root must be NAME=PATH")
-    if name in {".", ".."} or re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]*", name) is None:
-        raise argparse.ArgumentTypeError(
-            "code root name must contain only letters, digits, dots, hyphens, or underscores"
-        )
-    return name, Path(raw_path.strip()).expanduser()
-
-
-class _CodeRootAction(argparse.Action):
-    def __call__(self, parser: argparse.ArgumentParser, namespace: argparse.Namespace,
-                 value: tuple[str, Path], option_string: str | None = None) -> None:
-        roots = list(getattr(namespace, self.dest, ()) or ())
-        if any(existing_name == value[0] for existing_name, _ in roots):
-            raise argparse.ArgumentError(self, f"duplicate code root name: {value[0]}")
-        roots.append(value)
-        setattr(namespace, self.dest, roots)
-
-
 def parser() -> argparse.ArgumentParser:
     command = argparse.ArgumentParser(prog="dockbench", description="Manage Dockbench.")
     actions = command.add_subparsers(dest="command", metavar="COMMAND")
     deploy = actions.add_parser("deploy", help="Build and deploy Dockbench on this Docker host.")
     deploy.add_argument("--port", type=_port, default=DEFAULT_SERVER_PORT)
-    deploy.add_argument("--code-root", action=_CodeRootAction, type=_code_root, default=[], metavar="NAME=PATH",
-                        help="Named host code root to make available in Dockbench; repeat for multiple roots.")
+    deploy.add_argument("--workspace", metavar="PATH",
+                        help="Host workspace root mounted at /workspace (default: /data/$USER/workspace on remote hosts).")
     deploy.add_argument("--state-root", help="Host directory for persistent Dockbench state.")
     deploy.add_argument("--docker-command", help="Docker-compatible command used on the remote host.")
     connect_command = actions.add_parser("connect", help="Open a local SSH tunnel to a deployed Dockbench.")
@@ -256,7 +233,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             return _workstation("start", arguments.image, arguments.gpu, arguments.replace)
         return _workstation(arguments.command)
     if arguments.command == "deploy":
-        return _deploy(arguments.port, arguments.code_root, arguments.state_root, arguments.docker_command)
+        return _deploy(arguments.port, arguments.workspace, arguments.state_root, arguments.docker_command)
     if arguments.command == "connect":
         return _connect(arguments.ssh_host, arguments.local_port, arguments.remote_port, arguments.open_browser)
     if arguments.command == "serve":

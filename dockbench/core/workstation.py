@@ -16,7 +16,7 @@ from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 from typing import Callable, Iterable, Protocol
 
-from dockbench.core.defaults import DEFAULT_IMAGE, code_roots_from_json, default_code_roots, default_state_root
+from dockbench.core.defaults import DEFAULT_IMAGE, default_state_root, default_workspace_root, workspace_root_from_value
 from dockbench.core.errors import DockerCommandError, WorkstationContainerExists, WorkstationError, WorkstationGPUConflict, WorkstationRebuildRequired, WorkstationReplaceRequired
 from dockbench.core.host_inventory import HostInventory
 
@@ -76,26 +76,26 @@ class SubprocessDockerRunner:
 
 @dataclass(frozen=True)
 class WorkstationConfig:
-    repository_root: Path; docker_command: str; code_roots: dict[str, Path]; state_root: Path; shm_size: str
+    repository_root: Path; docker_command: str; workspace_root: Path; state_root: Path; shm_size: str
     host_uid: int; host_gid: int; host_user: str; image: str | None; container_name: str
     vnc_port: int; vncviewer_command: str; docker_mode: str; container_uid: int; container_gid: int
     dynamic_vnc_port: bool = False
     @property
-    def launch_config(self) -> str: return json.dumps({"code_roots": {name: str(path) for name, path in sorted(self.code_roots.items())}, "state_root": str(self.state_root), "shm_size": self.shm_size, "host_uid": self.host_uid, "host_gid": self.host_gid, "docker_mode": self.docker_mode, "vnc_port": self.vnc_port}, separators=(",", ":"), sort_keys=True)
+    def launch_config(self) -> str: return json.dumps({"workspace_root": str(self.workspace_root), "state_root": str(self.state_root), "shm_size": self.shm_size, "host_uid": self.host_uid, "host_gid": self.host_gid, "docker_mode": self.docker_mode, "vnc_port": self.vnc_port}, separators=(",", ":"), sort_keys=True)
     @classmethod
     def from_environment(cls, repository_root: Path | None = None) -> "WorkstationConfig":
         env = os.environ; root = repository_root or Path(__file__).resolve().parents[2]
-        roots_value = env.get("DOCKBENCH_CODE_ROOTS")
-        code_roots = code_roots_from_json(roots_value) if roots_value else default_code_roots()
-        if not code_roots:
-            raise WorkstationError("no code roots found; create ~/android-ws or ~/GitHub, or set DOCKBENCH_CODE_ROOTS")
+        workspace_value = env.get("DOCKBENCH_WORKSPACE")
+        workspace_root = workspace_root_from_value(workspace_value) if workspace_value else default_workspace_root()
+        if workspace_root is None:
+            raise WorkstationError("workspace root not found; create ~/workspace (or /data/$USER/workspace on remote hosts), or set DOCKBENCH_WORKSPACE")
         state_root = Path(env.get("DOCKBENCH_STATE_ROOT", str(default_state_root()))).expanduser(); port = env.get("DOCKBENCH_VNC_PORT", "5901")
         if not re.fullmatch(r"[1-9][0-9]*", port): raise WorkstationError(f"VNC port must be a positive integer: {port}")
         docker = env.get("DOCKBENCH_DOCKER", "docker")
         if shutil.which(docker) is None: raise WorkstationError(f"Docker command not found: {docker}")
         security = SubprocessDockerRunner(docker).run(["info", "--format", "{{json .SecurityOptions}}"], capture=True); rootless = "rootless" in security
         uid = int(env.get("DOCKBENCH_HOST_UID", str(os.getuid()))); gid = int(env.get("DOCKBENCH_HOST_GID", str(os.getgid())))
-        return cls(root, docker, code_roots, state_root, env.get("DOCKBENCH_SHM_SIZE", "32g"), uid, gid, env.get("DOCKBENCH_HOST_USER", "user"), env.get("DOCKBENCH_IMAGE", DEFAULT_IMAGE), env.get("DOCKBENCH_CONTAINER", "dockbench"), int(port), env.get("DOCKBENCH_VNC_VIEWER", "vncviewer"), "rootless" if rootless else "rootful", 0 if rootless else uid, 0 if rootless else gid)
+        return cls(root, docker, workspace_root, state_root, env.get("DOCKBENCH_SHM_SIZE", "32g"), uid, gid, env.get("DOCKBENCH_HOST_USER", "user"), env.get("DOCKBENCH_IMAGE", DEFAULT_IMAGE), env.get("DOCKBENCH_CONTAINER", "dockbench"), int(port), env.get("DOCKBENCH_VNC_VIEWER", "vncviewer"), "rootless" if rootless else "rootful", 0 if rootless else uid, 0 if rootless else gid)
 
 
 @dataclass(frozen=True)
@@ -160,8 +160,7 @@ class Workstation:
         # Never force a platform for an arbitrary local image: Docker has
         # already resolved the image's locally available architecture.
         args = ["run", "-d", "--name", c.container_name, "--hostname", c.container_name, "--user", "root", "--shm-size", c.shm_size, "--restart", "unless-stopped", "--label", "io.github.notanyrobot.dockbench.managed=true", "--label", f"io.github.notanyrobot.dockbench.state-root={c.state_root}", "--label", f"io.github.notanyrobot.dockbench.launch-spec={spec.label_value()}", "--label", f"io.github.notanyrobot.dockbench.image-id={spec.image_id}", "--label", f"io.github.notanyrobot.dockbench.image-ref={spec.image_ref}", "--label", f"io.github.notanyrobot.dockbench.gpus={','.join(spec.gpu_uuids)}", "--label", f"io.github.notanyrobot.dockbench.launch-config={c.launch_config}"]
-        for name, path in sorted(c.code_roots.items()):
-            args.extend(["--mount", f"type=bind,src={path},dst=/workspace/{name}"])
+        args.extend(["--mount", f"type=bind,src={c.workspace_root},dst=/workspace"])
         args.extend(["--mount", f"type=bind,src={c.state_root},dst=/state"])
         if spec.gpu_uuids:
             device_request = f"device={','.join(spec.gpu_uuids)}"
@@ -393,16 +392,16 @@ class FleetManager:
             names = set()
         return tuple(sorted(names))
 
-    def _config_for(self, name: str) -> WorkstationConfig:
+    def _config_for(self, name: str, workspace_root: Path | None = None) -> WorkstationConfig:
         self._validate_name(name)
         if name == self.config.container_name:
-            return self.config
-        return replace(self.config, container_name=name,
+            return replace(self.config, workspace_root=workspace_root) if workspace_root else self.config
+        return replace(self.config, container_name=name, workspace_root=workspace_root or self.config.workspace_root,
                        state_root=self.config.state_root / "containers" / name,
                        vnc_port=0, dynamic_vnc_port=True)
 
-    def _workstation(self, name: str) -> Workstation:
-        return Workstation(self._config_for(name), self.docker, self.host_inventory)
+    def _workstation(self, name: str, workspace_root: Path | None = None) -> Workstation:
+        return Workstation(self._config_for(name, workspace_root), self.docker, self.host_inventory)
 
     def _is_stale(self, status: WorkstationStatus) -> bool:
         if not status.image_id:
@@ -463,20 +462,24 @@ class FleetManager:
             # Cleanup must never hide the startup failure that prompted it.
             return
 
-    def _start_with_created_cleanup(self, name: str, **kwargs: object) -> WorkstationStatus:
+    def _start_with_created_cleanup(self, name: str, workspace_root: Path | None = None,
+                                    **kwargs: object) -> WorkstationStatus:
         try:
-            return self._workstation(name).start(**kwargs)
+            return self._workstation(name, workspace_root).start(**kwargs)
         except Exception:
             self._remove_failed_created_container(name)
             raise
 
-    def create(self, name: str, image: str, gpu_uuids: tuple[str, ...] = (), all_gpus: bool = False) -> WorkstationStatus:
+    def create(self, name: str, image: str, gpu_uuids: tuple[str, ...] = (), all_gpus: bool = False,
+               workspace_root: str | None = None) -> WorkstationStatus:
         name = self._validate_name(name)
         with self.locked():
             if self._exists(name): raise WorkstationContainerExists(name)
+            selected_workspace = workspace_root_from_value(workspace_root) if workspace_root is not None else self.config.workspace_root
             selected = self.host_inventory.resolve_gpus(gpu_uuids, all_gpus)
             self._ensure_gpus_available(tuple(gpu.uuid for gpu in selected))
-            self._start_with_created_cleanup(name, image=image, gpus=tuple(gpu.uuid for gpu in selected), all_gpus=False)
+            self._start_with_created_cleanup(name, workspace_root=selected_workspace,
+                                             image=image, gpus=tuple(gpu.uuid for gpu in selected), all_gpus=False)
             return self._status(name)
 
     def start(self, name: str) -> WorkstationStatus:

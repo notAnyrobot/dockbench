@@ -38,7 +38,7 @@ recipe, replaces the default managed container, and starts it again:
 uv run dockbench image rebuild
 ```
 
-The replacement retains host-mounted code roots and `.dockbench` state, but
+The replacement retains the workspace root and `.dockbench` state, but
 discards changes made only in the old container filesystem.
 
 Use Docker directly for general inventory:
@@ -63,26 +63,28 @@ uv run dockbench stop
 The default launch uses `android-ws:u22.04-cu12.8-v2` and all reported GPUs.
 Use `--gpu none` for CPU-only operation, or repeat `--gpu` to select a subset.
 A running managed container is immutable: changing image or GPU selection
-requires `--replace`, which retains code roots and `/state` but discards its
-container filesystem. Containers run as root, so files created in a code root
+requires `--replace`, which retains the workspace mount and `/state` but discards its
+container filesystem. Containers run as root, so files created in a workspace root
 may become root-owned on the host.
 
-Dockbench mounts each named code root at `/workspace/<name>`. Its defaults are
-`~/android-ws` and `~/GitHub` locally, and `/data/$USER/android-ws` and
-`/data/$USER/GitHub` on remote hosts with a per-user `/data/$USER` directory.
-Those roots appear in the container as `/workspace/android-ws` and
-`/workspace/GitHub`.
+Dockbench presents one host workspace root through the `/workspace` mount. The default is
+`~/workspace` locally and `/data/$USER/workspace` on remote hosts with a
+per-user `/data/$USER` directory. Thus the standard roots `~/workspace` and
+`/data/atom7/workspace` have the same in-container path.
 
-Override local roots with the JSON-object `DOCKBENCH_CODE_ROOTS` environment
-variable. For a remote deployment, repeat `--code-root NAME=PATH`:
+Override the detected root with `DOCKBENCH_WORKSPACE`. For a remote deployment,
+use `--workspace PATH`:
 
 ```bash
-export DOCKBENCH_CODE_ROOTS="{\"android-ws\":\"$HOME/android-ws\",\"GitHub\":\"$HOME/GitHub\"}"
+export DOCKBENCH_WORKSPACE="$HOME/workspace"
 uv run dockbench start
-uv run dockbench deploy \
-  --code-root android-ws=/data/$USER/android-ws \
-  --code-root GitHub=/data/$USER/GitHub
+uv run dockbench deploy --workspace /data/$USER/workspace
 ```
+
+The browser's **Create container** dialog uses that normalized root by default.
+Enable **Use a custom workspace root** to mount another existing host directory
+at `/workspace` for that container, or use **Reset to default** to restore the
+normalized root.
 
 `DOCKBENCH_VNC_PASSWORD` is used only while provisioning a VNC password; never
 store it in this repository. The desktop image advertises desktop contract

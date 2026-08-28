@@ -13,13 +13,16 @@ The host-local process that provides the browser workbench for one container hos
 _Avoid_: Workbench service, host manager
 
 **Managed container**:
-A development container created and recognized by Dockbench, with persistent code-root and state mounts.
+A development container created and recognized by Dockbench, with persistent workspace and state mounts.
 _Avoid_: Workstation, desktop container
 
-**Code root**:
-A named host-owned directory containing related project checkouts and presented
-consistently to every managed container regardless of host layout.
-_Avoid_: Workspace
+**Workspace root**:
+A host-owned directory containing related project checkouts.
+_Avoid_: Code root, project root, workspace
+
+**Workspace mount**:
+The managed-container attachment that presents a workspace root at the stable `/workspace` path.
+_Avoid_: Code-root mount
 
 **Image recipe**:
 A repository-owned, versioned build definition that selects a Dockerfile and its default image tag, target, and platform.

@@ -7,17 +7,16 @@ trap 'rm -rf "$temporary_dir"' EXIT
 
 fake_docker="$PWD/tests/helpers/fake-docker"
 fake_vncviewer="$PWD/tests/helpers/fake-vncviewer"
-android_root="$temporary_dir/android-ws"
-github_root="$temporary_dir/GitHub"
+workspace_root="$temporary_dir/workspace"
 state_root="$temporary_dir/.dockbench"
 vnc_password_file="$state_root/home/.vnc/passwd"
-mkdir -p "$android_root" "$github_root"
+mkdir -p "$workspace_root"
 
 run_ws() {
   FAKE_DOCKER_LOG="$temporary_dir/docker.log" FAKE_DOCKER_STATE="$temporary_dir/docker.state" \
   FAKE_LAUNCH_SPEC="$temporary_dir/launch-spec" FAKE_VNC_PASSWORD="$vnc_password_file" \
   FAKE_VNC_RUNNING="$temporary_dir/vnc-running" DOCKBENCH_DOCKER="$fake_docker" \
-  DOCKBENCH_CODE_ROOTS="{\"android-ws\":\"$android_root\",\"GitHub\":\"$github_root\"}" DOCKBENCH_STATE_ROOT="$state_root" \
+  DOCKBENCH_WORKSPACE="$workspace_root" DOCKBENCH_STATE_ROOT="$state_root" \
   DOCKBENCH_SHM_SIZE=8g DOCKBENCH_HOST_UID=1234 DOCKBENCH_HOST_GID=5678 \
   DOCKBENCH_HOST_USER=test-user uv run --no-sync dockbench "$@"
 }
@@ -38,8 +37,7 @@ DOCKBENCH_IMAGE=dockbench:test-desktop DOCKBENCH_CONTAINER=test-container run_ws
 grep -Fx 'test-container: running' "$temporary_dir/output" >/dev/null
 grep -F -- '|--name|test-container|' "$temporary_dir/docker.log" >/dev/null
 grep -F -- '|--user|root|' "$temporary_dir/docker.log" >/dev/null
-grep -F -- "src=$android_root,dst=/workspace/android-ws" "$temporary_dir/docker.log" >/dev/null
-grep -F -- "src=$github_root,dst=/workspace/GitHub" "$temporary_dir/docker.log" >/dev/null
+grep -F -- "src=$workspace_root,dst=/workspace" "$temporary_dir/docker.log" >/dev/null
 grep -F -- "src=$state_root,dst=/state" "$temporary_dir/docker.log" >/dev/null
 ! test -e "$vnc_password_file"
 

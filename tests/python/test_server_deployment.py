@@ -16,37 +16,36 @@ from dockbench.core.server_deployment import (
 def _deployment(tmp_path: Path) -> ServerDeployment:
     root = tmp_path / "repo"
     (root / "apps/workbench").mkdir(parents=True)
-    code_root = tmp_path / "code"
-    code_root.mkdir()
+    workspace_root = tmp_path / "workspace"
+    workspace_root.mkdir()
     (root / "assets/systemd").mkdir(parents=True)
     (root / "assets/systemd/dockbench.service").write_text(
         "ExecStart=__UV_EXECUTABLE__ run --project __SERVER_ROOT__ dockbench serve --port __SERVER_PORT__ --config __SERVER_CONFIG__\nEnvironmentFile=__SERVER_ENV_FILE__\n"
     )
     return ServerDeployment(DeploymentOptions(
         root,
-        code_roots=(("repo", code_root),),
+        workspace_root=workspace_root,
         config_home=tmp_path / "config",
         state_home=tmp_path / "state",
     ))
 
 
-def test_runtime_config_is_allowlisted_and_persists_named_code_roots(tmp_path, monkeypatch):
+def test_runtime_config_is_allowlisted_and_persists_workspace_root(tmp_path, monkeypatch):
     deployment = _deployment(tmp_path)
     root = tmp_path / "GitHub"
     root.mkdir()
     deployment = ServerDeployment(DeploymentOptions(
         deployment.options.repository_root,
-        code_roots=(("GitHub", root),),
+        workspace_root=root,
         config_home=tmp_path / "config",
         state_home=tmp_path / "state",
     ))
-    monkeypatch.setenv("DOCKBENCH_WORKSPACE", "/cluster/workspace")
     monkeypatch.setenv("DOCKBENCH_VNC_PASSWORD", "do-not-save")
     monkeypatch.setenv("UNRELATED", "also-do-not-save")
     values = deployment._write_runtime_config()
 
     persisted = json.loads(deployment.config_path.read_text())
-    assert values == {"DOCKBENCH_CODE_ROOTS": json.dumps({"GitHub": str(root)})}
+    assert values == {"DOCKBENCH_WORKSPACE": str(root)}
     assert persisted["environment"] == values
     assert "DOCKBENCH_VNC_PASSWORD" not in deployment.environment_path.read_text()
     assert "UNRELATED" not in deployment.config_path.read_text()
@@ -61,29 +60,28 @@ def test_runtime_config_rejects_legacy_environment_names(tmp_path):
     assert load_runtime_config(config) == {}
 
 
-def test_new_deployment_ignores_legacy_and_workspace_environment(tmp_path, monkeypatch):
+def test_new_deployment_ignores_legacy_environment(tmp_path, monkeypatch):
     deployment = _deployment(tmp_path)
     monkeypatch.setenv("ROBOTICS_WS_CODE_ROOT", "/legacy/Code")
-    monkeypatch.setenv("DOCKBENCH_WORKSPACE", "/workspace")
 
     assert deployment._snapshot_environment() == {
-        "DOCKBENCH_CODE_ROOTS": json.dumps({"repo": str(tmp_path / "code")}),
+        "DOCKBENCH_WORKSPACE": str(tmp_path / "workspace"),
     }
 
 
-def test_deployment_uses_code_roots_from_environment_when_cli_does_not_override(tmp_path, monkeypatch):
+def test_deployment_uses_workspace_from_environment_when_cli_does_not_override(tmp_path, monkeypatch):
     deployment = _deployment(tmp_path)
-    github = tmp_path / "GitHub"
-    github.mkdir()
+    workspace = tmp_path / "configured-workspace"
+    workspace.mkdir()
     deployment = ServerDeployment(DeploymentOptions(
         deployment.options.repository_root,
         config_home=tmp_path / "config",
         state_home=tmp_path / "state",
     ))
-    monkeypatch.setenv("DOCKBENCH_CODE_ROOTS", json.dumps({"GitHub": str(github)}))
+    monkeypatch.setenv("DOCKBENCH_WORKSPACE", str(workspace))
 
     assert deployment._snapshot_environment() == {
-        "DOCKBENCH_CODE_ROOTS": json.dumps({"GitHub": str(github)}),
+        "DOCKBENCH_WORKSPACE": str(workspace),
     }
 
 
@@ -126,17 +124,17 @@ def test_deploy_builds_before_install_and_systemd_unit_uses_serve(tmp_path, monk
     assert result.manager == "systemd"
 
 
-def test_deploy_rejects_missing_code_root_before_build(tmp_path, monkeypatch):
+def test_deploy_rejects_missing_workspace_root_before_build(tmp_path, monkeypatch):
     deployment = _deployment(tmp_path)
     deployment = ServerDeployment(DeploymentOptions(
         deployment.options.repository_root,
-        code_roots=(("GitHub", tmp_path / "missing"),),
+        workspace_root=tmp_path / "missing",
         config_home=tmp_path / "config",
         state_home=tmp_path / "state",
     ))
     monkeypatch.setattr(deployment, "_require_build_tools", lambda: pytest.fail("build preflight should not run"))
 
-    with pytest.raises(DeploymentError, match=r"code root 'GitHub' does not exist: .*--code-root NAME=PATH"):
+    with pytest.raises(DeploymentError, match=r"workspace root does not exist: .*--workspace PATH"):
         deployment.deploy()
 
 
