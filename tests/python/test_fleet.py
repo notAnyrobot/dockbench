@@ -1,3 +1,4 @@
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -129,6 +130,28 @@ def test_container_rejects_a_missing_custom_code_root(tmp_path):
 
     with pytest.raises(WorkstationError, match="workspace root does not exist"):
         fleet.create("custom-root", "demo:image", workspace_root=str(tmp_path / "missing"))
+
+
+def test_container_can_optionally_mount_a_custom_data_root(tmp_path):
+    configuration = replace(config(tmp_path), data_mounts=((tmp_path / "default-data", "/data/motions"),))
+    docker = Docker(); fleet = FleetManager(configuration, docker, Inventory())
+
+    fleet.create("without-data", "demo:image")
+    without_data = next(command for command in docker.commands if command[:2] == ["run", "-d"])
+    assert not any("dst=/data/motions" in value for value in without_data)
+
+    custom = tmp_path / "custom-data"
+    custom.mkdir()
+    fleet.create("with-data", "demo:image", data_root=str(custom))
+    with_data = next(command for command in reversed(docker.commands) if command[:2] == ["run", "-d"])
+    assert f"type=bind,src={custom},dst=/data/motions" in with_data
+
+
+def test_container_rejects_a_missing_custom_data_root(tmp_path):
+    fleet = FleetManager(config(tmp_path), Docker(), Inventory())
+
+    with pytest.raises(WorkstationError, match="data root does not exist"):
+        fleet.create("custom-data", "demo:image", data_root=str(tmp_path / "missing"))
 
 
 def test_fleet_reports_an_occupied_docker_name_as_a_typed_conflict(tmp_path):

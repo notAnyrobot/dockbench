@@ -26,7 +26,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from dockbench.core.defaults import DEFAULT_IMAGE
-from dockbench.core.errors import DockerCommandError, WorkstationContainerExists, WorkspaceRootError
+from dockbench.core.errors import DataRootError, DockerCommandError, WorkstationContainerExists, WorkspaceRootError
 from dockbench.core.workstation import (
     Workstation,
     WorkstationError,
@@ -142,6 +142,7 @@ class ContainerCreateRequest(BaseModel):
     gpu_uuids: list[str] = Field(default_factory=list, max_length=64)
     all_gpus: bool = False
     workspace_root: str | None = Field(default=None, min_length=1, max_length=4096)
+    data_root: str | None = Field(default=None, min_length=1, max_length=4096)
 
 
 class ImageBuildRequest(BaseModel):
@@ -251,6 +252,8 @@ def safe_error(exc: Exception) -> JSONResponse:
         )
     if isinstance(exc, WorkspaceRootError):
         return response(422, "invalid_workspace_root", "The selected workspace root does not exist or is not a directory.")
+    if isinstance(exc, DataRootError):
+        return response(422, "invalid_data_root", "The selected data root does not exist or is not a directory.")
     if isinstance(exc, WorkstationReplaceRequired):
         return response(409, "workstation_replace_required", "The requested image or GPU selection differs. Replacing keeps the workspace mount and /state but discards the old container filesystem.")
     if isinstance(exc, WorkstationRebuildRequired):
@@ -406,11 +409,15 @@ def create_app(workstation: Workstation | None = None, fleet: Any | None = None,
     async def host_inventory():
         try:
             fleet_manager = managed_fleet()
-            workspace_root = getattr(getattr(fleet_manager, "config", None), "workspace_root", None)
+            config = getattr(fleet_manager, "config", None)
+            workspace_root = getattr(config, "workspace_root", None)
+            data_mounts = getattr(config, "data_mounts", ())
+            data_root = next((source for source, destination in data_mounts if destination == "/data/motions"), None)
             return {
                 **await inventory_with_reservations(),
                 "default_all_gpus": True,
                 "workspace_root": str(workspace_root) if workspace_root is not None else None,
+                "data_root": str(data_root) if data_root is not None else None,
             }
         except Exception as exc:
             return safe_error(exc)
@@ -450,7 +457,7 @@ def create_app(workstation: Workstation | None = None, fleet: Any | None = None,
         try:
             status = await _fleet_call(
                 "create", body.name, body.image, tuple(body.gpu_uuids), body.all_gpus,
-                body.workspace_root,
+                body.workspace_root, body.data_root,
             )
             return container_public(status)
         except Exception as exc:

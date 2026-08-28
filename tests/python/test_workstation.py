@@ -1,3 +1,4 @@
+from dataclasses import replace
 from pathlib import Path
 import subprocess
 import threading
@@ -143,6 +144,19 @@ def test_creation_defaults_to_desktop_image_and_all_gpus(tmp_path):
     assert command[-3:] == ["sha256:image", "-lc", "exec sleep infinity"]
     assert "--entrypoint" in command
     assert any(f"src={fake.config.workspace_root},dst=/workspace" in item for item in command)
+
+
+def test_creation_mounts_discovered_motion_data_at_data_motions(tmp_path):
+    configuration = config(tmp_path, DEFAULT_IMAGE)
+    motion_root = tmp_path / "motion_datasets"
+    motion_root.mkdir()
+    configuration = replace(configuration, data_mounts=((motion_root, "/data/motions"),))
+    fake = FakeDocker(configuration)
+
+    Workstation(configuration, fake, FakeInventory()).start()
+
+    command = next(command for command in fake.commands if command[:2] == ["run", "-d"])
+    assert f"type=bind,src={motion_root},dst=/data/motions" in command
 
 
 def test_creation_can_explicitly_select_cpu_only(tmp_path):

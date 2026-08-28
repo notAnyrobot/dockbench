@@ -86,6 +86,11 @@ Enable **Use a custom workspace root** to mount another existing host directory
 at `/workspace` for that container, or use **Reset to default** to restore the
 normalized root.
 
+When `/data/share/motion_datasets` exists on the host, the browser offers it as
+the default optional data root. Enable **Mount data** to mount that directory—or
+another existing host directory—at `/data/motions` for the new container. The
+leaf mount keeps the rest of the image's `/data` directory available.
+
 `DOCKBENCH_VNC_PASSWORD` is used only while provisioning a VNC password; never
 store it in this repository. The desktop image advertises desktop contract
 `v1`; shell-only images can still be used with `dockbench shell`.

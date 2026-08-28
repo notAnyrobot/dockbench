@@ -1,9 +1,10 @@
 """Stable Dockbench defaults for the host workspace root and images."""
 from pathlib import Path
 
-from dockbench.core.errors import WorkspaceRootError
+from dockbench.core.errors import DataRootError, WorkspaceRootError
 
 DEFAULT_IMAGE = "android-ws:u22.04-cu12.8-v2"
+DEFAULT_MOTION_DATA_ROOT = Path("/data/share/motion_datasets")
 
 
 def default_workspace_root(*, home: Path | None = None, data_root: Path = Path("/data")) -> Path | None:
@@ -21,6 +22,21 @@ def workspace_root_from_value(value: str) -> Path:
     root = Path(value).expanduser().resolve()
     if not root.is_dir():
         raise WorkspaceRootError(f"workspace root does not exist: {root}")
+    return root
+
+
+def default_data_mounts(*, motion_root: Path = DEFAULT_MOTION_DATA_ROOT) -> tuple[tuple[Path, str], ...]:
+    """Discover optional shared datasets exposed to every managed container."""
+    return ((motion_root.resolve(), "/data/motions"),) if motion_root.is_dir() else ()
+
+
+def data_root_from_value(value: str) -> Path:
+    """Validate a custom host data root selected for ``/data/motions``."""
+    if not value:
+        raise DataRootError("data root must be a non-empty directory path")
+    root = Path(value).expanduser().resolve()
+    if not root.is_dir():
+        raise DataRootError(f"data root does not exist: {root}")
     return root
 
 
