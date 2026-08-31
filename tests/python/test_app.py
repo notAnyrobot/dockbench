@@ -1,5 +1,6 @@
 import asyncio
 import json
+import os
 import time
 
 import pytest
@@ -207,6 +208,83 @@ def test_tcp_open_failure_removes_the_desktop_socket():
         with client.websocket_connect(f"/api/desktop/sessions/{token}/ws", headers={"origin": "http://testserver"}) as socket:
             socket.receive_bytes()
     assert app.state.desktop_sockets == set()
+
+
+def test_terminal_resize_reaches_the_interactive_child(tmp_path):
+    docker_probe = tmp_path / "docker-probe"
+    docker_probe.write_text(
+        "#!/bin/sh\n"
+        "trap 'printf \"RESIZED \"; stty size' WINCH\n"
+        "printf 'READY\\r\\n'\n"
+        "sleep 1\n"
+        "printf 'DONE\\r\\n'\n"
+    )
+    docker_probe.chmod(0o755)
+
+    fleet = FakeFleet()
+    fleet.config = type(
+        "Config",
+        (),
+        {
+            "workspace_root": "/data/atom7/workspace",
+            "data_mounts": (),
+            "docker_command": os.fspath(docker_probe),
+        },
+    )()
+    app = create_app(FakeWorkstation(), fleet=fleet)
+    session_id = asyncio.run(app.state.terminal_sessions.create("alpha"))
+
+    output = ""
+    with TestClient(app).websocket_connect(
+        f"/api/terminals/{session_id}/ws",
+        headers={"origin": "http://testserver"},
+    ) as socket:
+        socket.send_json({"type": "resize", "rows": 24, "cols": 80})
+        while "READY" not in output:
+            output += socket.receive_text()
+        socket.send_json({"type": "resize", "rows": 37, "cols": 120})
+        while "DONE" not in output:
+            output += socket.receive_text()
+
+    assert "RESIZED 37 120" in output
+
+
+def test_terminal_has_browser_dimensions_before_interactive_child_starts(tmp_path, monkeypatch):
+    docker_probe = tmp_path / "docker-probe"
+    docker_probe.write_text("#!/bin/sh\nprintf 'READY\\r\\n'\nsleep 1\nprintf 'DONE\\r\\n'\n")
+    docker_probe.chmod(0o755)
+
+    fleet = FakeFleet()
+    fleet.config = type(
+        "Config",
+        (),
+        {
+            "workspace_root": "/data/atom7/workspace",
+            "data_mounts": (),
+            "docker_command": os.fspath(docker_probe),
+        },
+    )()
+    app = create_app(FakeWorkstation(), fleet=fleet)
+    session_id = asyncio.run(app.state.terminal_sessions.create("alpha"))
+    spawned_sizes = []
+    create_subprocess_exec = asyncio.create_subprocess_exec
+
+    async def capture_spawn_size(*args, **kwargs):
+        spawned_sizes.append(os.get_terminal_size(kwargs["stdin"]))
+        return await create_subprocess_exec(*args, **kwargs)
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", capture_spawn_size)
+
+    output = ""
+    with TestClient(app).websocket_connect(
+        f"/api/terminals/{session_id}/ws",
+        headers={"origin": "http://testserver"},
+    ) as socket:
+        socket.send_json({"type": "resize", "rows": 37, "cols": 120})
+        while "DONE" not in output:
+            output += socket.receive_text()
+
+    assert spawned_sizes == [os.terminal_size((120, 37))]
 
 
 def test_start_accepts_image_gpu_and_replace_fields():

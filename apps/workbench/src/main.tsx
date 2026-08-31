@@ -5,7 +5,7 @@ import { Terminal as Xterm } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import "@xterm/xterm/css/xterm.css";
 import { apiErrorMessage, imageJobLog, suggestContainerName, toggleAllGpuSelection } from "./fleet";
-import { closeTerminalSession, resizeTerminalSurface, restoreTerminalSurface } from "./terminal";
+import { closeTerminalSession, resizeTerminalOnSocketOpen, resizeTerminalSurface, restoreTerminalSurface } from "./terminal";
 import { ActivityEntry, ActivityLevel, dockHeight, inspectorWidth, loadActivity, recordActivity, saveActivity, saveLayout } from "./activity";
 import "./styles.css";
 
@@ -77,10 +77,10 @@ function App() {
       const terminal = new Xterm({ cursorBlink: true, fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace", fontSize: 13, theme: { background: "#090f1b", foreground: "#d3ffe7" } });
       const session: Session = { id: result.session_id, container: container.name, socket, terminal, fit: new FitAddon(), connected: false, opened: false };
       terminal.loadAddon(session.fit); terminal.onData((data) => { if (sessionMap.current.get(session.id) === session && socket.readyState === WebSocket.OPEN) socket.send(JSON.stringify({ type: "input", data })); }); sessionMap.current.set(session.id, session);
-      socket.onopen = () => { if (sessionMap.current.get(session.id) !== session) return; session.connected = true; socket.send(JSON.stringify({ type: "resize", cols: terminal.cols, rows: terminal.rows })); setSessions((current) => [...current]); setDockView("bash"); addActivity(`Root Bash connected to ${container.name}.`, "success"); };
+      socket.onopen = () => { if (sessionMap.current.get(session.id) !== session) return; session.connected = true; resizeTerminalOnSocketOpen(session, WebSocket.OPEN); setSessions((current) => [...current]); setDockView("bash"); addActivity(`Root Bash connected to ${container.name}.`, "success"); };
       socket.onmessage = (event) => { if (sessionMap.current.get(session.id) !== session) return; let data = typeof event.data === "string" ? event.data : ""; try { const message = JSON.parse(data); data = message.data ?? message.output ?? data; } catch { /* raw PTY output */ } terminal.write(data); };
       socket.onclose = () => { if (sessionMap.current.get(session.id) !== session) return; session.connected = false; terminal.write("\r\n[terminal disconnected]\r\n"); setSessions((current) => [...current]); addActivity(`Root Bash disconnected from ${container.name}.`, "warning"); };
-      setSessions((current) => [...current, session]); setActiveSession(session.id);
+      setSessions((current) => [...current, session]); setActiveSession(session.id); setDockView("bash");
     } catch (problem) { const message = problem instanceof Error ? problem.message : "Could not start a Bash session."; setError(message); addActivity(`${container.name}: Bash failed — ${message}`, "error"); }
   };
   const startJob = async (operation: "build" | "load" | "verify", body?: Record<string, unknown> | File) => { try { const file = body instanceof File ? body : undefined; const path = operation === "load" ? "/api/images/load" : operation === "verify" ? `/api/images/${encodeURIComponent(String((body as Record<string, unknown>).image_id))}/verify` : "/api/images/build"; const job = await api<Job>(path, { method: "POST", body: file ?? JSON.stringify(operation === "verify" ? {} : body ?? {}), headers: file ? { "content-type": "application/x-tar" } : undefined }); setJobs((current) => [job, ...current]); setNotice(`${operation === "load" ? "Image load" : operation === "verify" ? "Image verification" : (body as Record<string, unknown>)?.no_cache ? "No-cache build" : "Image build"} started.`); } catch (problem) { setError(problem instanceof Error ? problem.message : "Image job could not be started."); } };

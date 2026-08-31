@@ -46,6 +46,15 @@ export function resizeTerminalSurface(
   return true;
 }
 
+/** Send the initial geometry only after xterm has a mounted surface to fit. */
+export function resizeTerminalOnSocketOpen(
+  session: RestorableTerminalSession & { opened: boolean },
+  openSocketState: number,
+): boolean {
+  if (!session.opened) return false;
+  return resizeTerminalSurface(session, openSocketState);
+}
+
 /** Restore xterm after its browser tab or Dockbench pane becomes visible. */
 export function restoreTerminalSurface(
   session: RestorableTerminalSession,

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { closeTerminalSession, restoreTerminalSurface } from "./terminal";
+import { closeTerminalSession, resizeTerminalOnSocketOpen, restoreTerminalSurface } from "./terminal";
 
 describe("terminal session lifecycle", () => {
   it("closes and disposes the active tab exactly once", () => {
@@ -20,6 +20,32 @@ describe("terminal session lifecycle", () => {
 });
 
 describe("terminal surface restoration", () => {
+  it("waits for the surface to mount before sending its initial dimensions", () => {
+    const messages: string[] = [];
+    const session = {
+      opened: false,
+      socket: { readyState: 1, send: (value: string) => { messages.push(value); } },
+      fit: { fit: () => { throw new Error("must not fit before mount"); } },
+      terminal: { cols: 80, rows: 24, refresh: () => undefined, focus: () => undefined },
+    };
+
+    expect(resizeTerminalOnSocketOpen(session, 1)).toBe(false);
+    expect(messages).toEqual([]);
+  });
+
+  it("fits a mounted surface before sending its initial dimensions", () => {
+    const messages: string[] = [];
+    const session = {
+      opened: true,
+      socket: { readyState: 1, send: (value: string) => { messages.push(value); } },
+      fit: { fit: () => { session.terminal.cols = 132; session.terminal.rows = 43; } },
+      terminal: { cols: 80, rows: 24, refresh: () => undefined, focus: () => undefined },
+    };
+
+    expect(resizeTerminalOnSocketOpen(session, 1)).toBe(true);
+    expect(messages).toEqual([JSON.stringify({ type: "resize", cols: 132, rows: 43 })]);
+  });
+
   it("refits, repaints, focuses, and reports dimensions after becoming visible", () => {
     const events: string[] = [];
     const messages: string[] = [];

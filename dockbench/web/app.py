@@ -873,20 +873,57 @@ def create_app(workstation: Workstation | None = None, fleet: Any | None = None,
         session = await app.state.terminal_sessions.consume(session_id)
         if session is None:
             await socket.close(code=1008); return
+        await socket.accept()
+        initial_input: str | None = None
+        initial_rows, initial_columns = 24, 80
+        try:
+            initial_message = await asyncio.wait_for(socket.receive(), timeout=2)
+        except asyncio.TimeoutError:
+            initial_message = None
+        if initial_message is not None:
+            if initial_message["type"] == "websocket.disconnect": return
+            initial_raw = initial_message.get("text")
+            if initial_raw is not None:
+                try:
+                    initial_data = json.loads(initial_raw)
+                except json.JSONDecodeError:
+                    initial_data = initial_raw
+                if isinstance(initial_data, dict) and initial_data.get("type") == "resize":
+                    try:
+                        rows = int(initial_data.get("rows", 0))
+                        columns = int(initial_data.get("cols", 0))
+                        if 1 <= rows <= 1000 and 1 <= columns <= 1000:
+                            initial_rows, initial_columns = rows, columns
+                    except (TypeError, ValueError):
+                        pass
+                else:
+                    data = initial_data.get("data", initial_raw) if isinstance(initial_data, dict) else initial_data
+                    if isinstance(data, str):
+                        initial_input = data
         master_fd, slave_fd = pty.openpty()
+        fcntl.ioctl(
+            master_fd,
+            termios.TIOCSWINSZ,
+            struct.pack("HHHH", initial_rows, initial_columns, 0, 0),
+        )
         try:
             config = managed_fleet().config
+
+            def attach_controlling_terminal() -> None:
+                os.setsid()
+                fcntl.ioctl(slave_fd, termios.TIOCSCTTY, 0)
+
             process = await asyncio.create_subprocess_exec(
                 config.docker_command, "exec", "-it", "--user", "root", "--workdir", "/workspace",
                 session.container_name, "/bin/sh", "-lc",
                 "if command -v bash >/dev/null 2>&1; then exec bash -l; else exec /bin/sh; fi",
-                stdin=slave_fd, stdout=slave_fd, stderr=slave_fd, preexec_fn=os.setsid,
+                stdin=slave_fd, stdout=slave_fd, stderr=slave_fd,
+                preexec_fn=attach_controlling_terminal,
             )
         except (OSError, WorkstationError):
             os.close(master_fd); os.close(slave_fd)
             await socket.close(code=1011); return
         os.close(slave_fd)
-        await socket.accept()
         tasks: list[asyncio.Task[None]] = []
         try:
             def resize(rows: int, columns: int) -> None:
@@ -895,6 +932,8 @@ def create_app(workstation: Workstation | None = None, fleet: Any | None = None,
                 fcntl.ioctl(master_fd, termios.TIOCSWINSZ, struct.pack("HHHH", rows, columns, 0, 0))
 
             async def browser_to_shell() -> None:
+                if initial_input is not None:
+                    os.write(master_fd, initial_input.encode())
                 while True:
                     message = await socket.receive()
                     if message["type"] == "websocket.disconnect": return
