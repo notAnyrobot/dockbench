@@ -141,9 +141,12 @@ def test_creation_defaults_to_desktop_image_and_all_gpus(tmp_path):
     assert result.state == "running" and result.image_ref == DEFAULT_IMAGE and result.gpu_uuids == ("GPU-abc",)
     assert ["--gpus", "device=GPU-abc"] == command[command.index("--gpus"):command.index("--gpus") + 2]
     assert ["--user", "root"] == command[command.index("--user"):command.index("--user") + 2]
+    assert ["--env", "UV_CACHE_DIR=/state/cache/uv", "--env", "TMPDIR=/state/tmp"] == command[command.index("--env"):command.index("--env") + 4]
     assert command[-3:] == ["sha256:image", "-lc", "exec sleep infinity"]
     assert "--entrypoint" in command
     assert any(f"src={fake.config.workspace_root},dst=/workspace" in item for item in command)
+    assert (fake.config.state_root / "cache/uv").is_dir()
+    assert (fake.config.state_root / "tmp").is_dir()
 
 
 def test_creation_mounts_discovered_motion_data_at_data_motions(tmp_path):
