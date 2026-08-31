@@ -58,6 +58,83 @@ def test_start_shell_desktop_stop_and_status_dispatch(monkeypatch):
     ]
 
 
+def test_shell_enters_the_only_running_browser_managed_container(monkeypatch):
+    entered = []
+
+    class DefaultWorkstation:
+        config = SimpleNamespace(container_name="dockbench")
+        docker = object()
+        inventory = object()
+
+        def status(self):
+            return SimpleNamespace(state="absent")
+
+        def enter(self):
+            raise main.WorkstationError("dockbench is not running; use `dockbench start` first")
+
+    class BrowserFleet:
+        def __init__(self, config, runner, inventory):
+            assert config.container_name == "dockbench"
+
+        def containers(self):
+            return (SimpleNamespace(container_name="workstation-8gpu", state="running"),)
+
+        def enter(self, name):
+            entered.append(name)
+
+    monkeypatch.setattr(main, "Workstation", DefaultWorkstation)
+    monkeypatch.setattr(main, "FleetManager", BrowserFleet)
+
+    assert main.main(["shell"]) == 0
+    assert entered == ["workstation-8gpu"]
+
+
+def test_shell_enters_an_explicit_browser_managed_container(monkeypatch):
+    entered = []
+
+    class DefaultWorkstation:
+        config = SimpleNamespace(container_name="dockbench")
+        docker = object()
+        inventory = object()
+
+    class BrowserFleet:
+        def __init__(self, config, runner, inventory):
+            pass
+
+        def enter(self, name):
+            entered.append(name)
+
+    monkeypatch.setattr(main, "Workstation", DefaultWorkstation)
+    monkeypatch.setattr(main, "FleetManager", BrowserFleet)
+
+    assert main.main(["shell", "workstation-8gpu"]) == 0
+    assert entered == ["workstation-8gpu"]
+
+
+def test_shell_requires_a_name_when_multiple_managed_containers_are_running(monkeypatch, capsys):
+    class DefaultWorkstation:
+        config = SimpleNamespace(container_name="dockbench")
+        docker = object()
+        inventory = object()
+
+        def status(self):
+            return SimpleNamespace(state="absent")
+
+    class BrowserFleet:
+        def __init__(self, config, runner, inventory):
+            pass
+
+        def containers(self):
+            return tuple(SimpleNamespace(container_name=name, state="running")
+                         for name in ("workstation-4gpu", "workstation-8gpu"))
+
+    monkeypatch.setattr(main, "Workstation", DefaultWorkstation)
+    monkeypatch.setattr(main, "FleetManager", BrowserFleet)
+
+    assert main.main(["shell"]) == 1
+    assert "specify one with `dockbench shell CONTAINER`" in capsys.readouterr().err
+
+
 def test_image_operations_dispatch_and_no_recipe_group(monkeypatch):
     calls = []
     monkeypatch.setattr(main, "_build_recipe", lambda *args, **kwargs: calls.append(("build", args, kwargs)) or 0)

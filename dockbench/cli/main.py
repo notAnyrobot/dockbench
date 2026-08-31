@@ -16,7 +16,7 @@ from dockbench.core.images import WorkstationImages
 from dockbench.core.recipes import RecipeCatalog
 from dockbench.core.server_connection import DEFAULT_SERVER_PORT, connect
 from dockbench.core.server_deployment import DeploymentOptions, ServerDeployment, load_runtime_config
-from dockbench.core.workstation import SubprocessDockerRunner, Workstation, WorkstationError
+from dockbench.core.workstation import FleetManager, SubprocessDockerRunner, Workstation, WorkstationError
 
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
@@ -29,7 +29,7 @@ def _fail(message: str) -> int:
 
 
 def _workstation(action: str, image: str | None = None, gpus: list[str] | None = None,
-                 replace: bool = False) -> int:
+                 replace: bool = False, container_name: str | None = None) -> int:
     try:
         workstation = Workstation()
         if action == "start":
@@ -40,6 +40,24 @@ def _workstation(action: str, image: str | None = None, gpus: list[str] | None =
                 image=image, gpus=tuple(value for value in values if value not in {"all", "none"}),
                 all_gpus=None if gpus is None else "all" in values, replace=replace,
             )
+        elif action == "shell" and container_name is not None:
+            FleetManager(workstation.config, runner=workstation.docker,
+                         inventory=workstation.inventory).enter(container_name)
+            return 0
+        elif action == "shell" and workstation.status().state != "running":
+            fleet = FleetManager(workstation.config, runner=workstation.docker,
+                                 inventory=workstation.inventory)
+            running = tuple(item for item in fleet.containers() if item.state == "running")
+            if len(running) > 1:
+                names = ", ".join(item.container_name for item in running)
+                raise WorkstationError(
+                    f"multiple managed containers are running ({names}); "
+                    "specify one with `dockbench shell CONTAINER`"
+                )
+            if len(running) == 1:
+                fleet.enter(running[0].container_name)
+                return 0
+            result = workstation.enter()
         else:
             result = getattr(workstation, {"desktop": "open_vnc", "shell": "enter"}.get(action, action))()
         if action in {"start", "stop", "status"}:
@@ -200,7 +218,9 @@ def parser() -> argparse.ArgumentParser:
                        help="GPU UUID/index, 'all' (default), or 'none'; repeat for multiple GPUs.")
     start.add_argument("--replace", action="store_true",
                        help="Replace a container whose immutable image/GPU launch request differs.")
-    actions.add_parser("shell", help="Open Bash in the running managed container as the host user.")
+    shell = actions.add_parser("shell", help="Open Bash in a running managed container as the host user.")
+    shell.add_argument("container", nargs="?", metavar="CONTAINER",
+                       help="Managed container name; defaults to the sole running container.")
     actions.add_parser("desktop", help="Provision VNC if needed and open the native viewer.")
     actions.add_parser("stop", help="Stop the managed container without removing it.")
     actions.add_parser("status", help="Print managed container state.")
@@ -231,6 +251,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     if arguments.command in {"start", "shell", "desktop", "stop", "status"}:
         if arguments.command == "start":
             return _workstation("start", arguments.image, arguments.gpu, arguments.replace)
+        if arguments.command == "shell" and arguments.container is not None:
+            return _workstation("shell", container_name=arguments.container)
         return _workstation(arguments.command)
     if arguments.command == "deploy":
         return _deploy(arguments.port, arguments.workspace, arguments.state_root, arguments.docker_command)

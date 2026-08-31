@@ -55,6 +55,7 @@ uv run dockbench start
 uv run dockbench start --image ubuntu:24.04 --gpu none
 uv run dockbench start --image YOUR_IMAGE --gpu 0 --gpu GPU-UUID
 uv run dockbench shell
+uv run dockbench shell workstation-8gpu
 uv run dockbench desktop
 uv run dockbench status
 uv run dockbench stop
@@ -66,6 +67,10 @@ A running managed container is immutable: changing image or GPU selection
 requires `--replace`, which retains the workspace mount and `/state` but discards its
 container filesystem. Containers run as root, so files created in a workspace root
 may become root-owned on the host.
+
+`dockbench shell CONTAINER` enters a managed container created in the browser.
+Without a name, `shell` uses the configured default container when it is running,
+or the sole running managed container. If several are running, specify the name.
 
 Dockbench presents one host workspace root through the `/workspace` mount. The default is
 `~/workspace` locally and `/data/$USER/workspace` on remote hosts with a

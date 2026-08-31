@@ -114,6 +114,16 @@ def test_newly_created_named_container_is_discovered_by_docker_label(tmp_path):
     assert listing[listing.index("--filter") + 1] == "label=io.github.notanyrobot.dockbench.managed=true"
 
 
+def test_fleet_enters_a_named_managed_container(tmp_path):
+    docker = Docker(); fleet = FleetManager(config(tmp_path), docker, Inventory())
+    fleet.create("workstation-8gpu", "demo:image")
+
+    fleet.enter("workstation-8gpu")
+
+    command = next(command for command in reversed(docker.commands) if command[:2] == ["exec", "-it"])
+    assert "workstation-8gpu" in command
+
+
 def test_container_can_override_the_default_code_root(tmp_path):
     docker = Docker(); fleet = FleetManager(config(tmp_path), docker, Inventory())
     custom = tmp_path / "custom-code"

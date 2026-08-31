@@ -508,6 +508,10 @@ class FleetManager:
             self.container(name)
             return self._workstation(name).stop()
 
+    def enter(self, name: str) -> None:
+        self.container(name)
+        self._workstation(name).enter()
+
     def remove(self, name: str) -> None:
         with self.locked():
             self.container(name)
