@@ -1,3 +1,14 @@
+import type { ITerminalOptions } from "@xterm/xterm";
+
+export const TERMINAL_OPTIONS: ITerminalOptions = {
+  cursorBlink: true,
+  fontFamily: "Menlo, Monaco, 'Courier New', monospace",
+  fontSize: 14,
+  lineHeight: 1.2,
+  letterSpacing: 1,
+  theme: { background: "#090f1b", foreground: "#d3ffe7" },
+};
+
 /** A stale socket event must never close or dispose a replacement tab. */
 export type ClosableTerminalSession = {
   id: string;

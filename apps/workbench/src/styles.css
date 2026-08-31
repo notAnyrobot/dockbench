@@ -116,3 +116,7 @@ tbody tr.selected{
 .terminal-dock{grid-template-rows:47px minmax(0,1fr)}
 .terminal-pane{grid-row:2;min-height:0;display:grid;grid-template-rows:auto minmax(0,1fr)}
 .terminal-pane[hidden],.activity-log[hidden]{display:none}
+
+/* Dock maximize keeps the global header while dedicating the remaining viewport to the active dock. */
+.dock-actions{display:flex;align-items:center;gap:6px;margin-left:auto}.dock-actions .clear-activity{margin-left:0}.dock-maximize{display:inline-grid;place-items:center;width:29px;height:29px;padding:0;border-color:transparent;background:transparent;font-size:16px;line-height:1}.dock-maximize:hover:not(:disabled){border-color:#4a4a4a;background:#202020}
+.orchestrator.dock-maximized{grid-template-columns:minmax(0,1fr);grid-template-rows:60px minmax(0,1fr)}.orchestrator.dock-maximized .inspector,.orchestrator.dock-maximized .inventory-panel,.orchestrator.dock-maximized .column-resizer,.orchestrator.dock-maximized .row-resizer{display:none}.orchestrator.dock-maximized .terminal-dock{grid-row:2}
