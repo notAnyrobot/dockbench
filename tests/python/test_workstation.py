@@ -141,12 +141,12 @@ def test_creation_defaults_to_desktop_image_and_all_gpus(tmp_path):
     assert result.state == "running" and result.image_ref == DEFAULT_IMAGE and result.gpu_uuids == ("GPU-abc",)
     assert ["--gpus", "device=GPU-abc"] == command[command.index("--gpus"):command.index("--gpus") + 2]
     assert ["--user", "root"] == command[command.index("--user"):command.index("--user") + 2]
-    assert ["--env", "UV_CACHE_DIR=/state/cache/uv", "--env", "TMPDIR=/state/tmp", "--env", "UV_PYTHON_INSTALL_DIR=/workspace/.local/share/uv/python"] == command[command.index("--env"):command.index("--env") + 6]
+    assert ["--env", "UV_CACHE_DIR=/workspace/.cache/uv", "--env", "TMPDIR=/state/tmp", "--env", "UV_PYTHON_INSTALL_DIR=/workspace/.local/share/uv/python"] == command[command.index("--env"):command.index("--env") + 6]
     assert command[-3:] == ["sha256:image", "-lc", "exec sleep infinity"]
     assert "--entrypoint" in command
     assert any(f"src={fake.config.workspace_root},dst=/workspace" in item for item in command)
-    assert (fake.config.state_root / "cache/uv").is_dir()
     assert (fake.config.state_root / "tmp").is_dir()
+    assert (fake.config.workspace_root / ".cache/uv").is_dir()
     assert (fake.config.workspace_root / ".local/share/uv/python").is_dir()
 
 

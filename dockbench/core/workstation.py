@@ -158,12 +158,12 @@ class Workstation:
         self.docker.run(["run", "--rm", "--network", "none", "--entrypoint", "/bin/sh", spec.image_id, "-lc", "command -v sleep >/dev/null && sleep 0"])
     def _create(self, spec: LaunchSpecification) -> None:
         c = self.config; c.state_root.mkdir(parents=True, exist_ok=True)
-        (c.state_root / "cache/uv").mkdir(parents=True, exist_ok=True)
         (c.state_root / "tmp").mkdir(parents=True, exist_ok=True)
+        (c.workspace_root / ".cache/uv").mkdir(parents=True, exist_ok=True)
         (c.workspace_root / ".local/share/uv/python").mkdir(parents=True, exist_ok=True)
         # Never force a platform for an arbitrary local image: Docker has
         # already resolved the image's locally available architecture.
-        args = ["run", "-d", "--name", c.container_name, "--hostname", c.container_name, "--user", "root", "--shm-size", c.shm_size, "--restart", "unless-stopped", "--env", "UV_CACHE_DIR=/state/cache/uv", "--env", "TMPDIR=/state/tmp", "--env", "UV_PYTHON_INSTALL_DIR=/workspace/.local/share/uv/python", "--label", "io.github.notanyrobot.dockbench.managed=true", "--label", f"io.github.notanyrobot.dockbench.state-root={c.state_root}", "--label", f"io.github.notanyrobot.dockbench.launch-spec={spec.label_value()}", "--label", f"io.github.notanyrobot.dockbench.image-id={spec.image_id}", "--label", f"io.github.notanyrobot.dockbench.image-ref={spec.image_ref}", "--label", f"io.github.notanyrobot.dockbench.gpus={','.join(spec.gpu_uuids)}", "--label", f"io.github.notanyrobot.dockbench.launch-config={c.launch_config}"]
+        args = ["run", "-d", "--name", c.container_name, "--hostname", c.container_name, "--user", "root", "--shm-size", c.shm_size, "--restart", "unless-stopped", "--env", "UV_CACHE_DIR=/workspace/.cache/uv", "--env", "TMPDIR=/state/tmp", "--env", "UV_PYTHON_INSTALL_DIR=/workspace/.local/share/uv/python", "--label", "io.github.notanyrobot.dockbench.managed=true", "--label", f"io.github.notanyrobot.dockbench.state-root={c.state_root}", "--label", f"io.github.notanyrobot.dockbench.launch-spec={spec.label_value()}", "--label", f"io.github.notanyrobot.dockbench.image-id={spec.image_id}", "--label", f"io.github.notanyrobot.dockbench.image-ref={spec.image_ref}", "--label", f"io.github.notanyrobot.dockbench.gpus={','.join(spec.gpu_uuids)}", "--label", f"io.github.notanyrobot.dockbench.launch-config={c.launch_config}"]
         args.extend(["--mount", f"type=bind,src={c.workspace_root},dst=/workspace"])
         for source, destination in c.data_mounts:
             args.extend(["--mount", f"type=bind,src={source},dst={destination}"])
