@@ -175,7 +175,9 @@ class FleetManager:
             self.container(name)
             self._workstation(name).enter()
             return
-        default = self._workstation(self.config.container_name)
+        # Configured defaults retain their original identity rules; only
+        # explicit and discovered fleet names use managed-name validation.
+        default = Workstation(self.config, runner=self.docker, inventory=self.host_inventory)
         if default.status().state == "running":
             default.enter()
             return

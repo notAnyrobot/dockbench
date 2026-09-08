@@ -63,3 +63,16 @@ def test_http_failed_named_start_cleans_container_and_retains_state(tmp_path):
     assert "new" not in docker.containers
     assert (configuration.state_root / "containers" / "new").is_dir()
     assert client.get("/api/container-states").json() == {"container_states": [{"name": "new"}]}
+
+
+def test_shell_preserves_long_configured_default_but_validates_explicit_names(tmp_path, capsys):
+    name = "d" * 64
+    configuration = replace(config(tmp_path), container_name=name)
+    docker = Docker()
+    backend = Backend(config=configuration, runner=docker)
+    backend.inventory = Inventory()
+    assert main(["start", "--gpu", "none"], backend=backend) == 0
+    assert main(["shell"], backend=backend) == 0
+    assert any(command[:2] == ["exec", "-it"] and name in command for command in docker.commands)
+    assert main(["shell", name], backend=backend) == 1
+    assert "container names must be 1–63" in capsys.readouterr().err
