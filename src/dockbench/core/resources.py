@@ -15,7 +15,7 @@ class CheckoutResources:
 
     @classmethod
     def discover(cls, repository_root: Path | None = None) -> "CheckoutResources":
-        root = repository_root if repository_root is not None else Path(__file__).resolve().parents[2]
+        root = repository_root if repository_root is not None else Path(__file__).resolve().parents[3]
         return cls(Path(root).expanduser().resolve())
 
     @property
@@ -28,7 +28,7 @@ class CheckoutResources:
 
     @property
     def frontend_source(self) -> Path:
-        return self.repository_root / "apps" / "workbench"
+        return self.repository_root / "src" / "dockbench" / "web" / "frontend"
 
     @property
     def frontend_dist(self) -> Path:

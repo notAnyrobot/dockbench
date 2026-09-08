@@ -195,14 +195,14 @@ def test_serve_reports_explicit_checkout_build_location(tmp_path, monkeypatch, c
     assert main.main(["serve"]) == 1
     error = capsys.readouterr().err
     assert "frontend is not built" in error
-    assert str(root / "apps/workbench") in error
+    assert str(root / "src/dockbench/web/frontend") in error
 
 
 def test_serve_starts_built_checkout_from_other_directory(tmp_path, monkeypatch):
     from dockbench.core.resources import CheckoutResources
 
     root = tmp_path / "checkout"
-    dist = root / "apps/workbench/dist"
+    dist = root / "src/dockbench/web/frontend/dist"
     dist.mkdir(parents=True)
     (dist / "index.html").write_text("frontend")
     monkeypatch.setattr(main, "RESOURCES", CheckoutResources.discover(root))
@@ -216,12 +216,17 @@ def test_serve_starts_built_checkout_from_other_directory(tmp_path, monkeypatch)
     })]
 
 
-def test_installed_checkout_module_finds_recipes_from_other_directory(tmp_path):
+@pytest.mark.parametrize("entrypoint", ["console", "module"])
+def test_installed_checkout_finds_recipes_from_other_directory(tmp_path, entrypoint):
     import os
     import subprocess
     import sys
 
-    command = [sys.executable, "-m", "dockbench.cli.main", "image", "build", "android-ws"]
+    from pathlib import Path
+
+    command = ([str(Path(sys.executable).parent / "dockbench")] if entrypoint == "console"
+               else [sys.executable, "-m", "dockbench.cli.main"])
+    command += ["image", "build", "android-ws"]
     environment = dict(os.environ, DOCKBENCH_DOCKER=str(
         main.RESOURCES.repository_root / "tests/helpers/fake-docker"),
         FAKE_DOCKER_LOG=str(tmp_path / "docker.log"),

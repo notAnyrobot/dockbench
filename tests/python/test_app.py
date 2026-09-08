@@ -534,7 +534,7 @@ def test_failed_image_build_reports_sanitized_progress_and_actionable_error():
 
 def test_frontend_uses_explicit_checkout_outside_working_directory(tmp_path, monkeypatch):
     root = tmp_path / "checkout"
-    dist = root / "apps/workbench/dist"
+    dist = root / "src/dockbench/web/frontend/dist"
     (dist / "assets").mkdir(parents=True)
     (dist / "index.html").write_text("checkout frontend")
     (dist / "assets/app.js").write_text("checkout asset")

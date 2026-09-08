@@ -2,8 +2,8 @@
 
 Dockbench is a browser workbench and companion CLI for building managed Docker
 workstation images and running GPU-enabled development containers on local or
-remote Docker hosts. The installable Python package is `dockbench`; the browser
-client lives in `apps/workbench`.
+remote Docker hosts. The installable Python package lives in `src/dockbench`; the browser
+client lives in `src/dockbench/web/frontend`.
 
 The bundled `assets/images/android-ws` recipe provides a CUDA `core` target and
 a `desktop` target with XFCE, TigerVNC, and Firefox. Projects, environments,
@@ -17,11 +17,26 @@ documented upstream package and source hosts.
 
 ## Build and run
 
-Run the repository checks:
+Install the checkout and build the browser client before serving:
+
+```bash
+uv sync --frozen
+npm --prefix src/dockbench/web/frontend ci
+npm --prefix src/dockbench/web/frontend run build
+```
+
+Run the repository and application checks:
 
 ```bash
 bash tests/check-context.sh
+uv run pytest
+npm --prefix src/dockbench/web/frontend test
 ```
+
+The editable installation uses `src/dockbench` directly. From another directory,
+use `/path/to/dockbench/.venv/bin/dockbench` or
+`uv run --project /path/to/dockbench dockbench`; repository assets and frontend
+builds are resolved from that checkout.
 
 On a native Ubuntu `linux/amd64` host with NVIDIA Container Toolkit, build and
 verify the desktop image:
