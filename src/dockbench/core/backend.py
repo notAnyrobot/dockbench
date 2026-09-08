@@ -19,7 +19,8 @@ from dockbench.core.image_builder import ImageBuilder
 from dockbench.core.image_verifier import ImageVerifier
 from dockbench.core.host_inventory import HostInventory
 from dockbench.core.recipes import RecipeCatalog
-from dockbench.core.workstation import DockerRunner, FleetManager, SubprocessDockerRunner, Workstation, WorkstationConfig
+from dockbench.core.fleet import FleetManager
+from dockbench.core.workstation import DockerRunner, SubprocessDockerRunner, Workstation, WorkstationConfig
 
 
 class Backend:

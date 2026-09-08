@@ -21,6 +21,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
+from dockbench.web.containers import register_container_routes, container_public
 from dockbench.core.backend import Backend
 from dockbench.core.defaults import DEFAULT_IMAGE
 from dockbench.core.errors import DataRootError, DockerCommandError, WorkstationContainerExists, WorkspaceRootError
@@ -65,22 +66,6 @@ class SessionRequest(BaseModel):
 
 class PasswordResetRequest(BaseModel):
     password: str = Field(min_length=6, max_length=8)
-
-
-class StartRequest(BaseModel):
-    image: str | None = Field(default=None, min_length=1, max_length=512)
-    gpu_uuids: list[str] = Field(default_factory=list, max_length=64)
-    all_gpus: bool | None = None
-    replace: bool = False
-
-
-class ContainerCreateRequest(BaseModel):
-    name: str = Field(min_length=1, max_length=96, pattern=r"[a-zA-Z0-9][a-zA-Z0-9_.-]*")
-    image: str = Field(min_length=1, max_length=512)
-    gpu_uuids: list[str] = Field(default_factory=list, max_length=64)
-    all_gpus: bool = False
-    workspace_root: str | None = Field(default=None, min_length=1, max_length=4096)
-    data_root: str | None = Field(default=None, min_length=1, max_length=4096)
 
 
 class ImageBuildRequest(BaseModel):
@@ -231,149 +216,7 @@ def create_app(workstation: Workstation | None = None, fleet: Any | None = None,
             if container_name is None or app.state.desktop_socket_containers.get(socket) == container_name:
                 await socket.close(code=1012)
 
-    @app.get("/api/workstation")
-    async def workstation_status(response: Response, dockbench_csrf: str | None = Cookie(default=None)):
-        token = _issue_csrf(response, dockbench_csrf)
-        try:
-            return {**ws().status().public(), "csrf_token": token}
-        except Exception as exc:
-            return safe_error(exc)
-
-    @app.get("/api/host/inventory")
-    async def host_inventory():
-        try:
-            return {
-                **await inventory_with_reservations(),
-                "default_all_gpus": True,
-                **backend.host_defaults(),
-            }
-        except Exception as exc:
-            return safe_error(exc)
-
-    async def inventory_with_reservations() -> dict[str, Any]:
-        result = await _fleet_call("inventory")
-        # FleetManager owns reservation decisions.  The UI calls its display
-        # field `owner`; retain `reservation` for external consumers that used
-        # the core representation directly.
-        result["gpus"] = [{**gpu, "owner": gpu.get("reservation")} for gpu in result["gpus"]]
-        return result
-
-    def container_public(status: Any) -> dict[str, Any]:
-        result = _public(status)
-        result["name"] = result.get("container_name", "")
-        return result
-
-    @app.get("/api/containers")
-    async def containers(response: Response, dockbench_csrf: str | None = Cookie(default=None)):
-        token = _issue_csrf(response, dockbench_csrf)
-        try:
-            items = await _fleet_call("containers")
-            return {"containers": [container_public(item) for item in items], "csrf_token": token}
-        except Exception as exc:
-            return safe_error(exc)
-
-    @app.get("/api/containers/{name}")
-    async def container(name: str):
-        try:
-            return container_public(await _fleet_call("container", name))
-        except Exception as exc:
-            return safe_error(exc)
-
-    @app.post("/api/containers")
-    async def create_container(body: ContainerCreateRequest, request: Request, dockbench_csrf: str | None = Cookie(default=None)):
-        _require_csrf(request, dockbench_csrf)
-        try:
-            status = await _fleet_call(
-                "create", body.name, body.image, tuple(body.gpu_uuids), body.all_gpus,
-                body.workspace_root, body.data_root,
-            )
-            return container_public(status)
-        except Exception as exc:
-            return safe_error(exc)
-
-    @app.post("/api/containers/{name}/start")
-    async def start_container(name: str, request: Request, dockbench_csrf: str | None = Cookie(default=None)):
-        _require_csrf(request, dockbench_csrf)
-        try:
-            return container_public(await _fleet_call("start", name))
-        except Exception as exc:
-            return safe_error(exc)
-
-    @app.post("/api/containers/{name}/stop")
-    async def stop_container(name: str, request: Request, dockbench_csrf: str | None = Cookie(default=None)):
-        _require_csrf(request, dockbench_csrf)
-        try:
-            status = await _fleet_call("stop", name)
-            await _close_desktop_sockets(name)
-            return container_public(status)
-        except Exception as exc:
-            return safe_error(exc)
-
-    @app.post("/api/containers/{name}/remove")
-    async def remove_container(name: str, request: Request, dockbench_csrf: str | None = Cookie(default=None)):
-        _require_csrf(request, dockbench_csrf)
-        try:
-            await _fleet_call("remove", name)
-            await _close_desktop_sockets(name)
-            return {"removed": True, "name": name}
-        except Exception as exc:
-            return safe_error(exc)
-
-    @app.delete("/api/containers/{name}")
-    async def remove_container_delete(name: str, request: Request, dockbench_csrf: str | None = Cookie(default=None)):
-        return await remove_container(name, request, dockbench_csrf)
-
-    @app.delete("/api/containers/{name}/state")
-    async def delete_container_state(name: str, request: Request, dockbench_csrf: str | None = Cookie(default=None)):
-        _require_csrf(request, dockbench_csrf)
-        try:
-            await _fleet_call("delete_state", name)
-            return {"state_deleted": True, "name": name}
-        except Exception as exc:
-            return safe_error(exc)
-
-    @app.get("/api/container-states")
-    async def container_states():
-        try:
-            names = await _fleet_call("orphaned_states")
-            return {"container_states": [{"name": name} for name in names]}
-        except Exception as exc:
-            return safe_error(exc)
-
-    @app.post("/api/containers/{name}/recreate")
-    async def recreate_container(name: str, request: Request, dockbench_csrf: str | None = Cookie(default=None)):
-        _require_csrf(request, dockbench_csrf)
-        try:
-            status = await _fleet_call("recreate", name)
-            await _close_desktop_sockets(name)
-            return container_public(status)
-        except Exception as exc:
-            return safe_error(exc)
-
-    @app.get("/api/images")
-    async def images():
-        try:
-            data = await inventory_with_reservations()
-            containers = await _fleet_call("containers")
-            dependents: dict[str, list[str]] = {}
-            stale: dict[str, list[str]] = {}
-            for item in containers:
-                image_id = item.image_id
-                if image_id:
-                    dependents.setdefault(image_id, []).append(item.container_name)
-                    if getattr(item, "stale", False): stale.setdefault(image_id, []).append(item.container_name)
-            data["images"] = [{**image, "dependent_containers": dependents.get(str(image["id"]), []), "stale_dependents": stale.get(str(image["id"]), [])} for image in data["images"]]
-            return {"images": data["images"]}
-        except Exception as exc:
-            return safe_error(exc)
-
-    @app.get("/api/gpus")
-    async def gpus():
-        try:
-            data = await inventory_with_reservations()
-            return {"gpus": data["gpus"], "gpu_diagnostic": data["gpu_diagnostic"]}
-        except Exception as exc:
-            return safe_error(exc)
+    register_container_routes(app, ws, managed_fleet, backend.host_defaults, _close_desktop_sockets)
 
     @app.get("/api/image-recipes")
     async def image_recipes(response: Response, dockbench_csrf: str | None = Cookie(default=None)):
@@ -439,26 +282,6 @@ def create_app(workstation: Workstation | None = None, fleet: Any | None = None,
             return safe_error(exc)
 
     register_archive_routes(app, backend, jobs)
-
-    @app.post("/api/workstation/start")
-    async def start_workstation(request: Request, body: StartRequest | None = None, dockbench_csrf: str | None = Cookie(default=None)):
-        _require_csrf(request, dockbench_csrf)
-        try:
-            if body is None:
-                return (await run_in_threadpool(ws().start)).public()
-            return (await run_in_threadpool(ws().start, body.image, tuple(body.gpu_uuids), body.all_gpus, body.replace)).public()
-        except Exception as exc: return safe_error(exc)
-
-    @app.post("/api/workstation/stop")
-    async def stop_workstation(request: Request, dockbench_csrf: str | None = Cookie(default=None)):
-        _require_csrf(request, dockbench_csrf)
-        try:
-            result = await run_in_threadpool(ws().stop)
-            # A stopped container invalidates every active VNC transport.
-            for socket in tuple(app.state.desktop_sockets):
-                await socket.close(code=1012)
-            return result.public()
-        except Exception as exc: return safe_error(exc)
 
     @app.post("/api/desktop/sessions")
     async def create_desktop_session(body: SessionRequest, request: Request, dockbench_csrf: str | None = Cookie(default=None)):

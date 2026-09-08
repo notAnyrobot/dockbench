@@ -76,76 +76,37 @@ def test_start_shell_desktop_stop_and_status_dispatch(monkeypatch):
     ]
 
 
-def test_shell_enters_the_only_running_browser_managed_container(monkeypatch):
-    entered = []
-
-    class DefaultWorkstation:
-        config = SimpleNamespace(container_name="dockbench")
-        docker = object()
-        inventory = object()
-
-        def status(self):
-            return SimpleNamespace(state="absent")
-
-        def enter(self):
-            raise main.WorkstationError("dockbench is not running; use `dockbench start` first")
-
-    class BrowserFleet:
-        def __init__(self, config, runner, inventory):
-            assert config.container_name == "dockbench"
-
-        def containers(self):
-            return (SimpleNamespace(container_name="workstation-8gpu", state="running"),)
-
-        def enter(self, name):
-            entered.append(name)
-
-    backend = SimpleNamespace(workstation=DefaultWorkstation(), fleet=BrowserFleet(SimpleNamespace(container_name="dockbench"), None, None))
-
+def test_shell_enters_the_only_running_browser_managed_container(tmp_path):
+    from test_fleet import Docker, Inventory, config
+    from dockbench.core.backend import Backend
+    docker = Docker()
+    backend = Backend(config=config(tmp_path), runner=docker)
+    backend.inventory = Inventory()
+    backend.fleet.create("workstation-8gpu", "demo:image")
     assert main.main(["shell"], backend=backend) == 0
-    assert entered == ["workstation-8gpu"]
+    assert any(command[:2] == ["exec", "-it"] and "workstation-8gpu" in command for command in docker.commands)
 
 
-def test_shell_enters_an_explicit_browser_managed_container(monkeypatch):
-    entered = []
-
-    class DefaultWorkstation:
-        config = SimpleNamespace(container_name="dockbench")
-        docker = object()
-        inventory = object()
-
-    class BrowserFleet:
-        def __init__(self, config, runner, inventory):
-            pass
-
-        def enter(self, name):
-            entered.append(name)
-
-    backend = SimpleNamespace(workstation=DefaultWorkstation(), fleet=BrowserFleet(SimpleNamespace(container_name="dockbench"), None, None))
-
+def test_shell_enters_an_explicit_browser_managed_container(tmp_path):
+    from test_fleet import Docker, Inventory, config
+    from dockbench.core.backend import Backend
+    docker = Docker()
+    backend = Backend(config=config(tmp_path), runner=docker)
+    backend.inventory = Inventory()
+    backend.fleet.create("workstation-8gpu", "demo:image")
+    backend.fleet.create("other", "demo:image")
     assert main.main(["shell", "workstation-8gpu"], backend=backend) == 0
-    assert entered == ["workstation-8gpu"]
+    assert any(command[:2] == ["exec", "-it"] and "workstation-8gpu" in command for command in docker.commands)
 
 
-def test_shell_requires_a_name_when_multiple_managed_containers_are_running(monkeypatch, capsys):
-    class DefaultWorkstation:
-        config = SimpleNamespace(container_name="dockbench")
-        docker = object()
-        inventory = object()
-
-        def status(self):
-            return SimpleNamespace(state="absent")
-
-    class BrowserFleet:
-        def __init__(self, config, runner, inventory):
-            pass
-
-        def containers(self):
-            return tuple(SimpleNamespace(container_name=name, state="running")
-                         for name in ("workstation-4gpu", "workstation-8gpu"))
-
-    backend = SimpleNamespace(workstation=DefaultWorkstation(), fleet=BrowserFleet(SimpleNamespace(container_name="dockbench"), None, None))
-
+def test_shell_requires_a_name_when_multiple_managed_containers_are_running(tmp_path, capsys):
+    from test_fleet import Docker, Inventory, config
+    from dockbench.core.backend import Backend
+    docker = Docker()
+    backend = Backend(config=config(tmp_path), runner=docker)
+    backend.inventory = Inventory()
+    backend.fleet.create("workstation-4gpu", "demo:image")
+    backend.fleet.create("workstation-8gpu", "demo:image")
     assert main.main(["shell"], backend=backend) == 1
     assert "specify one with `dockbench shell CONTAINER`" in capsys.readouterr().err
 
