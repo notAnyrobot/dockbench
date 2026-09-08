@@ -564,3 +564,112 @@ def test_explicit_checkout_also_selects_default_backend_recipes(tmp_path, monkey
 
     assert response.status_code == 200
     assert response.json()["recipes"] == []
+
+
+def test_terminal_cancelled_launch_releases_pty(tmp_path, monkeypatch):
+    """Cancellation while launching must close the transport's allocated PTY."""
+    import concurrent.futures
+    descriptors = []
+
+    async def cancelled_launch(*args, **kwargs):
+        descriptors.append(kwargs["stdin"])
+        raise asyncio.CancelledError()
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", cancelled_launch)
+    app = create_app(FakeWorkstation(), fleet=FakeFleet())
+    token = asyncio.run(app.state.terminal_sessions.create("alpha"))
+    try:
+        with TestClient(app).websocket_connect(
+            f"/api/terminals/{token}/ws", headers={"origin": "http://testserver"}
+        ) as socket:
+            socket.send_json({"type": "resize", "rows": 24, "cols": 80})
+            socket.receive_text()
+    except (concurrent.futures.CancelledError, WebSocketDisconnect):
+        pass
+    assert descriptors
+    for descriptor in descriptors:
+        with pytest.raises(OSError):
+            os.fstat(descriptor)
+
+
+def test_terminal_disconnect_reaps_child_that_ignores_termination(tmp_path):
+    import sys
+    docker_probe = tmp_path / "docker-probe"
+    docker_probe.write_text(
+        f"#!{sys.executable}\n"
+        "import os, signal, time\n"
+        "signal.signal(signal.SIGTERM, signal.SIG_IGN)\n"
+        "signal.signal(signal.SIGHUP, signal.SIG_IGN)\n"
+        "print(os.getpid(), flush=True)\n"
+        "while True: time.sleep(1)\n"
+    )
+    docker_probe.chmod(0o755)
+    app = create_app(FakeWorkstation(), fleet=FakeFleet(),
+                     backend=Backend(environment={"DOCKBENCH_DOCKER": str(docker_probe)}))
+    token = asyncio.run(app.state.terminal_sessions.create("alpha"))
+    with TestClient(app).websocket_connect(
+        f"/api/terminals/{token}/ws", headers={"origin": "http://testserver"}
+    ) as socket:
+        socket.send_json({"type": "resize", "rows": 24, "cols": 80})
+        child_pid = int(socket.receive_text().strip())
+    with pytest.raises(ProcessLookupError):
+        os.kill(child_pid, 0)
+
+
+def test_desktop_disconnect_closes_tcp_connection_and_socket_registration():
+    import socket as tcp
+    import threading
+    disconnected = threading.Event()
+    with tcp.socket() as listener:
+        listener.bind(("127.0.0.1", 0))
+        listener.listen()
+        listener.settimeout(3)
+
+        def serve():
+            connection, _ = listener.accept()
+            with connection:
+                connection.settimeout(3)
+                connection.sendall(b"READY")
+                if connection.recv(1) == b"":
+                    disconnected.set()
+
+        worker = threading.Thread(target=serve, daemon=True)
+        worker.start()
+        app = create_app(FakeWorkstation())
+        token = asyncio.run(app.state.sessions.create(listener.getsockname()[1], "alpha"))
+        with TestClient(app).websocket_connect(
+            f"/api/containers/alpha/desktop/sessions/{token}/ws",
+            headers={"origin": "http://testserver"},
+        ) as socket:
+            assert socket.receive_bytes() == b"READY"
+        worker.join(timeout=3)
+    assert disconnected.is_set()
+    assert app.state.desktop_sockets == set()
+    assert app.state.desktop_socket_containers == {}
+
+
+def test_named_desktop_token_cannot_cross_containers_or_replay():
+    app = create_app(FakeWorkstation())
+    token = asyncio.run(app.state.sessions.create(5901, "alpha"))
+    client = TestClient(app)
+    for name in ("beta", "alpha"):
+        with pytest.raises(WebSocketDisconnect) as rejected:
+            with client.websocket_connect(
+                f"/api/containers/{name}/desktop/sessions/{token}/ws",
+                headers={"origin": "http://testserver"},
+            ):
+                pass
+        assert rejected.value.code == 1008
+
+
+def test_expired_terminal_token_cannot_launch_a_child(monkeypatch):
+    from dockbench.web import sessions
+    monkeypatch.setattr(sessions, "SESSION_TTL_SECONDS", 0)
+    app = create_app(FakeWorkstation())
+    token = asyncio.run(app.state.terminal_sessions.create("alpha"))
+    with pytest.raises(WebSocketDisconnect) as rejected:
+        with TestClient(app).websocket_connect(
+            f"/api/terminals/{token}/ws", headers={"origin": "http://testserver"}
+        ):
+            pass
+    assert rejected.value.code == 1008

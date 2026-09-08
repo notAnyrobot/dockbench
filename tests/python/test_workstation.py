@@ -235,8 +235,9 @@ def test_desktop_contract_restores_host_user_and_secure_vnc_paths(tmp_path):
     ws.start(image="test:image")
     provisioning = "\n".join(payload or "" for payload in fake.inputs)
     assert "NOPASSWD: ALL" in provisioning and 'ownership_marker="/state/.owner-${requested_uid}-${requested_gid}"' in provisioning
-    ws.enter()
-    assert any(command[:2] == ["exec", "-it"] and "1234:5678" in command and "HOME=/state/home" in command for command in fake.commands)
+    command = ws.access.shell().arguments
+    assert command[:2] == ("exec", "-it")
+    assert "1234:5678" in command and "HOME=/state/home" in command
     ws.ensure_desktop("password")
     assert any("AcceptPointerEvents" in " ".join(command) and "AcceptKeyEvents" in " ".join(command) for command in fake.commands)
     ws.reset_vnc_password("new-pass")

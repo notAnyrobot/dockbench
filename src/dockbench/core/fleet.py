@@ -9,6 +9,7 @@ from dataclasses import replace
 from pathlib import Path
 from typing import Iterable
 
+from dockbench.core.access import ShellExecution
 from dockbench.core.defaults import DEFAULT_IMAGE, data_root_from_value, workspace_root_from_value
 from dockbench.core.errors import WorkstationContainerExists, WorkstationError, WorkstationGPUConflict
 from dockbench.core.host_inventory import HostInventory
@@ -169,18 +170,16 @@ class FleetManager:
             self.container(name)
             return self._workstation(name).stop()
 
-    def enter(self, name: str | None = None) -> None:
-        """Enter an explicit managed container, the running default, or the sole running container."""
+    def shell(self, name: str | None = None) -> ShellExecution:
+        """Prepare a shell for a named container, running default, or sole running container."""
         if name is not None:
             self.container(name)
-            self._workstation(name).enter()
-            return
+            return self._workstation(name).access.shell()
         # Configured defaults retain their original identity rules; only
         # explicit and discovered fleet names use managed-name validation.
         default = Workstation(self.config, runner=self.docker, inventory=self.host_inventory)
         if default.status().state == "running":
-            default.enter()
-            return
+            return default.access.shell()
         running = tuple(item for item in self.containers() if item.state == "running")
         if len(running) > 1:
             names = ", ".join(item.container_name for item in running)
@@ -189,9 +188,9 @@ class FleetManager:
                 "specify one with `dockbench shell CONTAINER`"
             )
         if running:
-            self._workstation(running[0].container_name).enter()
+            return self._workstation(running[0].container_name).access.shell()
         else:
-            default.enter()
+            return default.access.shell()
 
     def remove(self, name: str) -> None:
         with self.locked():

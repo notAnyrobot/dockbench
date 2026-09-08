@@ -119,9 +119,7 @@ def test_fleet_enters_a_named_managed_container(tmp_path):
     docker = Docker(); fleet = FleetManager(config(tmp_path), docker, Inventory())
     fleet.create("workstation-8gpu", "demo:image")
 
-    fleet.enter("workstation-8gpu")
-
-    command = next(command for command in reversed(docker.commands) if command[:2] == ["exec", "-it"])
+    command = fleet.shell("workstation-8gpu").arguments
     assert "workstation-8gpu" in command
 
 
@@ -226,15 +224,12 @@ def test_shell_selection_prefers_default_then_sole_running_and_rejects_ambiguity
     docker = Docker()
     fleet = FleetManager(config(tmp_path), docker, Inventory())
     fleet.create("one", "demo:image")
-    fleet.enter()
-    assert any(command[:2] == ["exec", "-it"] and "one" in command for command in docker.commands)
+    assert "one" in fleet.shell().arguments
     fleet.create("two", "demo:image")
     with pytest.raises(WorkstationError, match="specify one"):
-        fleet.enter()
+        fleet.shell()
     fleet.create("dockbench", "demo:image")
     docker.commands.clear()
-    fleet.enter()
-    assert any(command[:2] == ["exec", "-it"] and "dockbench" in command for command in docker.commands)
+    assert "dockbench" in fleet.shell().arguments
     docker.commands.clear()
-    fleet.enter("two")
-    assert any(command[:2] == ["exec", "-it"] and "two" in command for command in docker.commands)
+    assert "two" in fleet.shell("two").arguments

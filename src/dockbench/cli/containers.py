@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 
+from dockbench.cli import access
 from dockbench.core.backend import Backend
 from dockbench.core.errors import WorkstationError
 from dockbench.cli.common import fail as _fail
@@ -22,10 +23,13 @@ def run(action: str, image: str | None = None, gpus: list[str] | None = None,
                 all_gpus=None if gpus is None else "all" in values, replace=replace,
             )
         elif action == "shell":
-            backend.fleet.enter(container_name)
+            access.shell(backend, container_name)
+            return 0
+        elif action == "desktop":
+            access.desktop(backend)
             return 0
         else:
-            result = getattr(workstation, {"desktop": "open_vnc", "shell": "enter"}.get(action, action))()
+            result = getattr(workstation, action)()
         if action in {"start", "stop", "status"}:
             print(f"{result.container_name}: {result.state}")
         return 0
@@ -40,9 +44,6 @@ def register(actions: argparse._SubParsersAction) -> None:
                        help="GPU UUID/index, 'all' (default), or 'none'; repeat for multiple GPUs.")
     start.add_argument("--replace", action="store_true",
                        help="Replace a container whose immutable image/GPU launch request differs.")
-    shell = actions.add_parser("shell", help="Open Bash in a running managed container as the host user.")
-    shell.add_argument("container", nargs="?", metavar="CONTAINER",
-                       help="Managed container name; defaults to the sole running container.")
-    actions.add_parser("desktop", help="Provision VNC if needed and open the native viewer.")
+    access.register(actions)
     actions.add_parser("stop", help="Stop the managed container without removing it.")
     actions.add_parser("status", help="Print managed container state.")
