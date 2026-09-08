@@ -14,6 +14,7 @@ from dockbench.core.workstation import (
 )
 from dockbench.core.errors import DataRootError, WorkstationContainerExists, WorkstationGPUConflict, WorkspaceRootError
 from dockbench.core.errors import DockerCommandError
+from dockbench.core.backend import Backend
 from dockbench.web.app import DesktopSessions, _redact_image_log, create_app
 from dockbench.core.recipes import RecipeError
 
@@ -231,7 +232,7 @@ def test_terminal_resize_reaches_the_interactive_child(tmp_path):
             "docker_command": os.fspath(docker_probe),
         },
     )()
-    app = create_app(FakeWorkstation(), fleet=fleet)
+    app = create_app(FakeWorkstation(), fleet=fleet, backend=Backend(environment={"DOCKBENCH_DOCKER": str(docker_probe)}))
     session_id = asyncio.run(app.state.terminal_sessions.create("alpha"))
 
     output = ""
@@ -264,7 +265,7 @@ def test_terminal_has_browser_dimensions_before_interactive_child_starts(tmp_pat
             "docker_command": os.fspath(docker_probe),
         },
     )()
-    app = create_app(FakeWorkstation(), fleet=fleet)
+    app = create_app(FakeWorkstation(), fleet=fleet, backend=Backend(environment={"DOCKBENCH_DOCKER": str(docker_probe)}))
     session_id = asyncio.run(app.state.terminal_sessions.create("alpha"))
     spawned_sizes = []
     create_subprocess_exec = asyncio.create_subprocess_exec
@@ -298,7 +299,8 @@ def test_start_accepts_image_gpu_and_replace_fields():
 
 def test_fleet_inventory_and_container_lifecycle_routes_are_scoped_and_csrf_protected():
     fleet = FakeFleet()
-    client = TestClient(create_app(FakeWorkstation(), fleet=fleet))
+    backend = Backend(config=type("Config", (), {"repository_root": None, "docker_command": "docker", "workspace_root": "/data/atom7/workspace", "data_mounts": (("/data/share/motion_datasets", "/data/motions"),)})())
+    client = TestClient(create_app(FakeWorkstation(), fleet=fleet, backend=backend))
     response = client.get("/api/containers")
     assert response.status_code == 200
     assert response.json()["containers"][0]["name"] == "alpha"

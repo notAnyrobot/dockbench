@@ -9,7 +9,8 @@ from pathlib import Path
 from typing import Callable, Sequence
 
 from dockbench.core.defaults import DEFAULT_IMAGE
-from dockbench.core.workstation import WorkstationError
+from dockbench.core.workstation import DockerRunner, WorkstationError
+from dockbench.core.errors import DockerCommandError
 
 
 ARCHIVE_NAME = "android-ws-u22.04-cu12.8-v2.tar"
@@ -23,10 +24,11 @@ class ImagePackageResult:
 
 class WorkstationImages:
     """Own image-transfer policy and Docker interaction behind a small API."""
-    def __init__(self, docker_command: str | None = None, image: str | None = None, run: Run = subprocess.run) -> None:
+    def __init__(self, docker_command: str | None = None, image: str | None = None, run: Run = subprocess.run, *, runner: DockerRunner | None = None) -> None:
         self.docker_command = docker_command or os.environ.get("DOCKBENCH_DOCKER", "docker")
         self.image = image or os.environ.get("DOCKBENCH_IMAGE", DEFAULT_IMAGE)
         self._run = run
+        self._runner = runner
 
     def _docker(self) -> str:
         if shutil.which(self.docker_command) is None:
@@ -36,6 +38,14 @@ class WorkstationImages:
     def package(self, directory: str | Path | None = None) -> ImagePackageResult:
         output_dir = Path(directory or "images")
         output_dir.mkdir(parents=True, exist_ok=True)
+        if self._runner is not None:
+            try:
+                self._runner.run(["image", "inspect", self.image], capture=True)
+            except DockerCommandError as exc:
+                raise WorkstationError(f"image is not available locally: {self.image}") from exc
+            archive = output_dir / ARCHIVE_NAME
+            self._runner.run(["save", "--output", str(archive), self.image])
+            return ImagePackageResult(archive)
         docker = self._docker()
         available = self._run([docker, "image", "inspect", self.image], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False)
         if available.returncode:
@@ -47,9 +57,12 @@ class WorkstationImages:
     def load(self, tarballs: Sequence[str | Path]) -> None:
         if not tarballs:
             raise WorkstationError("load requires at least one tar file")
-        docker = self._docker()
+        docker = self._docker() if self._runner is None else None
         for item in tarballs:
             tarball = Path(item)
             if not tarball.is_file():
                 raise WorkstationError(f"tar file does not exist: {tarball}")
-            self._run([docker, "load", "--input", str(tarball)], check=True)
+            if self._runner is not None:
+                self._runner.run(["load", "--input", str(tarball)])
+            else:
+                self._run([docker, "load", "--input", str(tarball)], check=True)

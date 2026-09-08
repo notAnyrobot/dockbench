@@ -14,7 +14,7 @@ import sys
 import time
 from dataclasses import asdict, dataclass, replace
 from pathlib import Path
-from typing import Callable, Iterable, Protocol
+from typing import Callable, Iterable, Mapping, Protocol
 
 from dockbench.core.resources import CheckoutResources
 from dockbench.core.defaults import DEFAULT_IMAGE, data_root_from_value, default_data_mounts, default_state_root, default_workspace_root, workspace_root_from_value
@@ -29,7 +29,9 @@ class DockerRunner(Protocol):
 
 class SubprocessDockerRunner:
     """Docker adapter that never composes a shell command."""
-    def __init__(self, command: str) -> None: self.command = command
+    def __init__(self, command: str, *, environment: Mapping[str, str] | None = None) -> None:
+        self.command = command
+        self.environment = dict(environment) if environment is not None else None
     def run(self, args: list[str], *, input: str | None = None, capture: bool = False,
             check: bool = True, on_output: Callable[[str], None] | None = None) -> str:
         if on_output is not None:
@@ -37,7 +39,7 @@ class SubprocessDockerRunner:
                 raise WorkstationError("streamed Docker output cannot be combined with input or captured output")
             return self._run_streamed(args, check=check, on_output=on_output)
         try:
-            result = subprocess.run([self.command, *args], input=input, text=True, stdout=subprocess.PIPE if capture else None, stderr=subprocess.PIPE, check=False)
+            result = subprocess.run([self.command, *args], input=input, text=True, env=self.environment, stdout=subprocess.PIPE if capture else None, stderr=subprocess.PIPE, check=False)
         except FileNotFoundError as exc: raise WorkstationError(f"Docker command not found: {self.command}") from exc
         if check and result.returncode:
             raise DockerCommandError((result.stderr or "").strip() or f"Docker command failed ({result.returncode})")
@@ -47,7 +49,7 @@ class SubprocessDockerRunner:
                       on_output: Callable[[str], None]) -> str:
         try:
             process = subprocess.Popen(
-                [self.command, *args], text=True, stdout=subprocess.PIPE,
+                [self.command, *args], text=True, env=self.environment, stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT, bufsize=1,
             )
         except FileNotFoundError as exc:
@@ -85,8 +87,8 @@ class WorkstationConfig:
     @property
     def launch_config(self) -> str: return json.dumps({"workspace_root": str(self.workspace_root), "data_mounts": [{"source": str(source), "destination": destination} for source, destination in self.data_mounts], "state_root": str(self.state_root), "shm_size": self.shm_size, "host_uid": self.host_uid, "host_gid": self.host_gid, "docker_mode": self.docker_mode, "vnc_port": self.vnc_port}, separators=(",", ":"), sort_keys=True)
     @classmethod
-    def from_environment(cls, repository_root: Path | None = None) -> "WorkstationConfig":
-        env = os.environ; root = CheckoutResources.discover(repository_root).repository_root
+    def from_environment(cls, repository_root: Path | None = None, *, environment: Mapping[str, str] | None = None, runner: DockerRunner | None = None) -> "WorkstationConfig":
+        env = os.environ if environment is None else environment; root = CheckoutResources.discover(repository_root).repository_root
         workspace_value = env.get("DOCKBENCH_WORKSPACE")
         workspace_root = workspace_root_from_value(workspace_value) if workspace_value else default_workspace_root()
         if workspace_root is None:
@@ -94,8 +96,8 @@ class WorkstationConfig:
         state_root = Path(env.get("DOCKBENCH_STATE_ROOT", str(default_state_root()))).expanduser(); port = env.get("DOCKBENCH_VNC_PORT", "5901")
         if not re.fullmatch(r"[1-9][0-9]*", port): raise WorkstationError(f"VNC port must be a positive integer: {port}")
         docker = env.get("DOCKBENCH_DOCKER", "docker")
-        if shutil.which(docker) is None: raise WorkstationError(f"Docker command not found: {docker}")
-        security = SubprocessDockerRunner(docker).run(["info", "--format", "{{json .SecurityOptions}}"], capture=True); rootless = "rootless" in security
+        if runner is None and shutil.which(docker) is None: raise WorkstationError(f"Docker command not found: {docker}")
+        security = (runner if runner is not None else SubprocessDockerRunner(docker)).run(["info", "--format", "{{json .SecurityOptions}}"], capture=True); rootless = "rootless" in security
         uid = int(env.get("DOCKBENCH_HOST_UID", str(os.getuid()))); gid = int(env.get("DOCKBENCH_HOST_GID", str(os.getgid())))
         return cls(root, docker, workspace_root, state_root, env.get("DOCKBENCH_SHM_SIZE", "32g"), uid, gid, env.get("DOCKBENCH_HOST_USER", "user"), env.get("DOCKBENCH_IMAGE", DEFAULT_IMAGE), env.get("DOCKBENCH_CONTAINER", "dockbench"), int(port), env.get("DOCKBENCH_VNC_VIEWER", "vncviewer"), "rootless" if rootless else "rootful", 0 if rootless else uid, 0 if rootless else gid, data_mounts=default_data_mounts())
 

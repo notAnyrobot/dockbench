@@ -31,7 +31,7 @@ grep -F 'WORKDIR /workspace' assets/images/android-ws/Dockerfile.android-ws-v2 >
 grep -F 'Dockerfile.android-ws-v2' src/dockbench/core/workstation.py >/dev/null
 grep -F 'dst=/workspace' src/dockbench/core/workstation.py >/dev/null
 grep -F 'DOCKBENCH_WORKSPACE' src/dockbench/core/workstation.py >/dev/null
-grep -F -- '--workspace' src/dockbench/cli/main.py >/dev/null
+grep -F -- '--workspace' src/dockbench/cli/deploy.py >/dev/null
 test -f src/dockbench/core/resources.py
 grep -F 'dockbench serve' assets/systemd/dockbench.service >/dev/null
 grep -F '__UV_EXECUTABLE__' assets/systemd/dockbench.service >/dev/null
