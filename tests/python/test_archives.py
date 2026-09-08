@@ -164,3 +164,23 @@ def test_shutdown_cleans_queued_upload_without_loading_it(tmp_path, monkeypatch)
     timer.join()
     assert len(loaded) == 1
     assert not list(tmp_path.glob('dockbench-image-*'))
+
+
+def test_download_allocation_failure_uses_safe_http_error(monkeypatch, caplog):
+    import tempfile
+    from fastapi.testclient import TestClient
+    from dockbench.web.app import create_app
+
+    def allocation_failure(*args, **kwargs):
+        raise OSError('cannot create /private/archive token=secret-value')
+
+    monkeypatch.setattr(tempfile, 'NamedTemporaryFile', allocation_failure)
+    with TestClient(create_app(backend=Backend(runner=ArchiveDocker())), raise_server_exceptions=False) as client:
+        response = client.get('/api/images/sha256:one/package')
+    assert response.status_code == 500
+    body = response.json()
+    assert body['code'] == 'internal_error'
+    assert body['message']
+    assert body['correlation_id'] in caplog.text
+    assert 'secret-value' not in response.text + caplog.text
+    assert '/private/archive' not in response.text + caplog.text

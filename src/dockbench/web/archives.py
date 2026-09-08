@@ -50,11 +50,12 @@ def register_archive_routes(app: FastAPI, backend: Backend, jobs: ImageJobs) -> 
 
     @app.get("/api/images/{image_id}/package")
     async def package_image(image_id: str):
-        temporary = tempfile.NamedTemporaryFile(prefix="dockbench-image-", suffix=".tar", delete=False)
-        path = Path(temporary.name)
-        temporary.close()
+        path: Path | None = None
         transferred = False
         try:
+            temporary = tempfile.NamedTemporaryFile(prefix="dockbench-image-", suffix=".tar", delete=False)
+            path = Path(temporary.name)
+            temporary.close()
             work = asyncio.create_task(run_in_threadpool(backend.images.export_archive, image_id, path))
             try:
                 result = await asyncio.shield(work)
@@ -73,5 +74,5 @@ def register_archive_routes(app: FastAPI, backend: Backend, jobs: ImageJobs) -> 
         except Exception as exc:
             return safe_error(exc)
         finally:
-            if not transferred:
+            if not transferred and path is not None:
                 path.unlink(missing_ok=True)
