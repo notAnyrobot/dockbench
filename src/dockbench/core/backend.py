@@ -7,7 +7,8 @@ needs it, using the same injected runner as all other capabilities.
 from __future__ import annotations
 
 import os
-from functools import cached_property
+import subprocess
+from functools import cached_property, partial
 from pathlib import Path
 from typing import Mapping
 
@@ -30,6 +31,7 @@ class Backend:
         self._environment = dict(os.environ if environment is None else environment)
         self.docker_command = config.docker_command if config else self._environment.get('DOCKBENCH_DOCKER', 'docker')
         self._runner = runner if runner is not None else SubprocessDockerRunner(self.docker_command, environment=self._environment)
+        self._archive_runner = runner
         self._config = config
         self._workspace_root = default_workspace_root()
         self._data_mounts = default_data_mounts()
@@ -77,7 +79,14 @@ class Backend:
 
     @cached_property
     def images(self) -> WorkstationImages:
-        return WorkstationImages(self.docker_command, (self._config.image if self._config is not None else self._environment.get('DOCKBENCH_IMAGE', DEFAULT_IMAGE)), runner=self._runner)
+        # CLI archives inherit both streams and retain CalledProcessError
+        # presentation. Other Docker operations deliberately capture stderr.
+        # Explicit runner injection still controls every Docker operation.
+        return WorkstationImages(
+            self.docker_command,
+            self._config.image if self._config is not None else self._environment.get('DOCKBENCH_IMAGE', DEFAULT_IMAGE),
+            run=partial(subprocess.run, env=self._environment), runner=self._archive_runner,
+        )
 
     def host_defaults(self) -> dict[str, str | None]:
         from dockbench.core.defaults import workspace_root_from_value

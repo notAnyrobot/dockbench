@@ -302,3 +302,33 @@ def test_web_module_starts_without_cli_dispatch(monkeypatch, tmp_path):
     assert exited.value.code == 0
     assert calls[0][1] == {'host': '127.0.0.1', 'port': 8787, 'proxy_headers': False}
     assert TestClient(calls[0][0]).get('/api/health').json() == {'status': 'ok'}
+
+
+@pytest.mark.parametrize('action', ['import', 'export'])
+@pytest.mark.parametrize('exit_code', [0, 7])
+def test_archive_cli_preserves_command_streams_and_failures(tmp_path, action, exit_code):
+    import os
+    import subprocess
+    import sys
+
+    docker = tmp_path / 'docker'
+    docker.write_text('#!/bin/sh\n'
+                      'if [ "$1" = image ]; then exit 0; fi\n'
+                      'printf "archive output\\n"\n'
+                      'printf "archive warning\\n" >&2\n'
+                      f'exit {exit_code}\n')
+    docker.chmod(0o755)
+    archive = tmp_path / 'input.tar'
+    archive.touch()
+    arguments = ['image', action, str(archive if action == 'import' else tmp_path / 'output')]
+    result = subprocess.run([sys.executable, '-m', 'dockbench.cli.main', *arguments],
+                            env=dict(os.environ, DOCKBENCH_DOCKER=str(docker),
+                                     DOCKBENCH_WORKSPACE='/missing/workspace'),
+                            capture_output=True, text=True)
+    assert result.returncode == (0 if exit_code == 0 else 1)
+    assert result.stdout.startswith('archive output\n')
+    assert result.stderr.startswith('archive warning\n')
+    if exit_code:
+        assert 'returned non-zero exit status 7' in result.stderr
+    else:
+        assert result.stderr == 'archive warning\n'
