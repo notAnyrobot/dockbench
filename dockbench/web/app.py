@@ -25,6 +25,7 @@ from starlette.background import BackgroundTask
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
+from dockbench.core.resources import CheckoutResources
 from dockbench.core.defaults import DEFAULT_IMAGE
 from dockbench.core.errors import DataRootError, DockerCommandError, WorkstationContainerExists, WorkspaceRootError
 from dockbench.core.workstation import (
@@ -38,8 +39,6 @@ from dockbench.core.host_inventory import HostInventory
 from dockbench.core.recipes import RecipeError
 
 LOG = logging.getLogger(__name__)
-ROOT = Path(__file__).resolve().parents[2]
-WEB_DIST = ROOT / "apps" / "workbench" / "dist"
 SESSION_TTL_SECONDS = 60
 MAX_IMAGE_JOB_LOG_LINES = 2000
 
@@ -293,7 +292,8 @@ def _issue_csrf(response: Response, current: str | None) -> str:
 
 def create_app(workstation: Workstation | None = None, fleet: Any | None = None,
                recipes: Any | None = None, image_builder: Any | None = None,
-               image_verifier: Any | None = None) -> FastAPI:
+               image_verifier: Any | None = None, *, repository_root: Path | None = None) -> FastAPI:
+    resources = CheckoutResources.discover(repository_root)
     app = FastAPI(title="Dockbench", docs_url=None, redoc_url=None, openapi_url=None)
     app.state.workstation = workstation
     app.state.fleet = fleet
@@ -364,7 +364,7 @@ def create_app(workstation: Workstation | None = None, fleet: Any | None = None,
         """The web layer only adapts the core recipe service; it owns no files."""
         if app.state.recipes is None:
             from dockbench.core.recipes import RecipeCatalog
-            app.state.recipes = RecipeCatalog(managed_fleet().config.repository_root / "assets" / "images")
+            app.state.recipes = RecipeCatalog.for_repository(managed_fleet().config.repository_root)
         return app.state.recipes
 
     def recipe_builder() -> Any:
@@ -981,13 +981,13 @@ def create_app(workstation: Workstation | None = None, fleet: Any | None = None,
                 try: await asyncio.wait_for(process.wait(), timeout=2)
                 except asyncio.TimeoutError: process.kill()
 
-    if WEB_DIST.is_dir():
-        app.mount("/assets", StaticFiles(directory=WEB_DIST / "assets"), name="assets")
+    if resources.frontend_dist.is_dir():
+        app.mount("/assets", StaticFiles(directory=resources.frontend_dist / "assets"), name="assets")
 
         @app.get("/{path:path}")
         async def frontend(path: str):
-            candidate = WEB_DIST / path
-            return FileResponse(candidate if path and candidate.is_file() else WEB_DIST / "index.html")
+            candidate = resources.frontend_dist / path
+            return FileResponse(candidate if path and candidate.is_file() else resources.frontend_dist / "index.html")
     else:
         @app.get("/")
         async def unavailable_frontend():

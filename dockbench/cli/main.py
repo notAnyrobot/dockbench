@@ -10,6 +10,7 @@ from typing import Sequence
 
 import uvicorn
 
+from dockbench.core.resources import CheckoutResources
 from dockbench.core.image_builder import ImageBuilder
 from dockbench.core.image_verifier import ImageVerifier
 from dockbench.core.images import WorkstationImages
@@ -19,8 +20,7 @@ from dockbench.core.server_deployment import DeploymentOptions, ServerDeployment
 from dockbench.core.workstation import FleetManager, SubprocessDockerRunner, Workstation, WorkstationError
 
 
-REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
-SERVER_INDEX = REPOSITORY_ROOT / "apps/workbench/dist/index.html"
+RESOURCES = CheckoutResources.discover()
 
 
 def _fail(message: str) -> int:
@@ -80,7 +80,7 @@ def _package_images(action: str, paths: list[str]) -> int:
 
 
 def _recipe_catalog() -> RecipeCatalog:
-    return RecipeCatalog.for_repository(REPOSITORY_ROOT)
+    return RecipeCatalog.for_repository(RESOURCES.repository_root)
 
 
 def _docker_runner() -> SubprocessDockerRunner:
@@ -116,7 +116,7 @@ def _verify_image(image: str) -> int:
 def _deployment(port: int = DEFAULT_SERVER_PORT, workspace_root: str | None = None,
                 state_root: str | None = None, docker_command: str | None = None) -> ServerDeployment:
     return ServerDeployment(DeploymentOptions(
-        repository_root=REPOSITORY_ROOT, port=port,
+        repository_root=RESOURCES.repository_root, port=port,
         workspace_root=Path(workspace_root).expanduser() if workspace_root else None,
         state_root=Path(state_root).expanduser() if state_root else None,
         docker_command=docker_command,
@@ -163,9 +163,10 @@ def _connect(ssh_host: str, local_port: int | None, remote_port: int, open_brows
 
 
 def _serve(port: int = DEFAULT_SERVER_PORT, config: str | Path | None = None) -> int:
-    if not SERVER_INDEX.is_file():
+    if not (RESOURCES.frontend_dist / "index.html").is_file():
         return _fail("Dockbench frontend is not built. Run `dockbench deploy` or:\n"
-                     "  npm ci --prefix apps/workbench\n  npm run --prefix apps/workbench build")
+                     f"  npm ci --prefix {RESOURCES.frontend_source}\n"
+                     f"  npm run --prefix {RESOURCES.frontend_source} build")
     try:
         if config is not None:
             os.environ.update(load_runtime_config(Path(config).expanduser()))

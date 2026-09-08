@@ -18,6 +18,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Mapping
 
+from dockbench.core.resources import CheckoutResources
 from dockbench.core.defaults import default_workspace_root, workspace_root_from_value
 from dockbench.core.errors import WorkstationError
 
@@ -205,7 +206,7 @@ class ServerDeployment:
             raise DeploymentError(f"command failed ({result.returncode}): {' '.join(args)}{': ' + detail if detail else ''}")
 
     def _build(self, uv: str, npm: str) -> None:
-        app = self.options.repository_root / "apps" / "workbench"
+        app = CheckoutResources.discover(self.options.repository_root).frontend_source
         if not app.is_dir():
             raise DeploymentError(f"Dockbench frontend directory does not exist: {app}")
         self._command([uv, "sync", "--frozen"], cwd=self.options.repository_root)
@@ -229,7 +230,7 @@ class ServerDeployment:
         raise DeploymentError(f"user systemd is available but unhealthy: {(result.stderr or result.stdout).strip()}")
 
     def _install_systemd(self, uv: str) -> DeploymentResult:
-        template_path = self.options.repository_root / "assets" / "systemd" / "dockbench.service"
+        template_path = CheckoutResources.discover(self.options.repository_root).assets / "systemd" / "dockbench.service"
         try:
             template = template_path.read_text(encoding="utf-8")
         except OSError as exc:

@@ -32,7 +32,7 @@ grep -F 'Dockerfile.android-ws-v2' dockbench/core/workstation.py >/dev/null
 grep -F 'dst=/workspace' dockbench/core/workstation.py >/dev/null
 grep -F 'DOCKBENCH_WORKSPACE' dockbench/core/workstation.py >/dev/null
 grep -F -- '--workspace' dockbench/cli/main.py >/dev/null
-grep -F 'apps" / "workbench" / "dist' dockbench/web/app.py >/dev/null
+test -f dockbench/core/resources.py
 grep -F 'dockbench serve' assets/systemd/dockbench.service >/dev/null
 grep -F '__UV_EXECUTABLE__' assets/systemd/dockbench.service >/dev/null
 grep -F '__SERVER_CONFIG__' assets/systemd/dockbench.service >/dev/null

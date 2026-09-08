@@ -15,6 +15,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Final
 
+from dockbench.core.resources import CheckoutResources
 from dockbench.core.errors import WorkstationError
 
 
@@ -180,7 +181,7 @@ class RecipeCatalog:
 
     @classmethod
     def for_repository(cls, repository_root: str | Path) -> "RecipeCatalog":
-        return cls(Path(repository_root) / "assets" / "images")
+        return cls(CheckoutResources.discover(Path(repository_root)).images)
 
     def list(self) -> tuple[ImageRecipe, ...]:
         if not self.images_root.exists():

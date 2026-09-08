@@ -16,6 +16,7 @@ from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 from typing import Callable, Iterable, Protocol
 
+from dockbench.core.resources import CheckoutResources
 from dockbench.core.defaults import DEFAULT_IMAGE, data_root_from_value, default_data_mounts, default_state_root, default_workspace_root, workspace_root_from_value
 from dockbench.core.errors import DockerCommandError, WorkstationContainerExists, WorkstationError, WorkstationGPUConflict, WorkstationRebuildRequired, WorkstationReplaceRequired
 from dockbench.core.host_inventory import HostInventory
@@ -85,7 +86,7 @@ class WorkstationConfig:
     def launch_config(self) -> str: return json.dumps({"workspace_root": str(self.workspace_root), "data_mounts": [{"source": str(source), "destination": destination} for source, destination in self.data_mounts], "state_root": str(self.state_root), "shm_size": self.shm_size, "host_uid": self.host_uid, "host_gid": self.host_gid, "docker_mode": self.docker_mode, "vnc_port": self.vnc_port}, separators=(",", ":"), sort_keys=True)
     @classmethod
     def from_environment(cls, repository_root: Path | None = None) -> "WorkstationConfig":
-        env = os.environ; root = repository_root or Path(__file__).resolve().parents[2]
+        env = os.environ; root = CheckoutResources.discover(repository_root).repository_root
         workspace_value = env.get("DOCKBENCH_WORKSPACE")
         workspace_root = workspace_root_from_value(workspace_value) if workspace_value else default_workspace_root()
         if workspace_root is None:
@@ -231,7 +232,7 @@ chown "$requested_uid:$requested_gid" /state/.dockbench-bashrc
             return self.status()
     def build(self, on_progress: Callable[[str], None] | None = None) -> None:
         image = self.config.image or DEFAULT_IMAGE
-        recipe_dir = self.config.repository_root / "assets" / "images" / "android-ws"
+        recipe_dir = CheckoutResources.discover(self.config.repository_root).images / "android-ws"
         report = on_progress or (lambda line: print(line, flush=True))
         self.docker.run(["buildx", "build", "--progress=plain", "--platform", "linux/amd64", "--file", str(recipe_dir / "Dockerfile.android-ws-v2"), "--target", "desktop", "--load", "--tag", image, str(recipe_dir)], on_output=report)
         print(f"{image}: image built")
