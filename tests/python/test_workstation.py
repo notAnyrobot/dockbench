@@ -242,3 +242,57 @@ def test_desktop_contract_restores_host_user_and_secure_vnc_paths(tmp_path):
     ws.reset_vnc_password("new-pass")
     reset = next(command for command in fake.commands if "temporary_file" in " ".join(command))
     assert reset[:2] == ["exec", "-i"]
+
+
+@pytest.mark.parametrize("image", [None, "test:image"])
+def test_rebuild_preserves_effective_build_and_persistent_mounts(tmp_path, image, capsys):
+    from dockbench.core.recipes import RecipeCatalog
+    c = config(tmp_path, image=image)
+    catalog = RecipeCatalog.for_repository(tmp_path)
+    catalog.create("android-ws", "FROM scratch", tag="different:tag", target=None, platform="linux/arm64")
+    catalog.revise("android-ws", "FROM scratch")
+    docker = FakeDocker(c)
+    ws = Workstation(c, docker, FakeInventory())
+    ws.start(image=image or DEFAULT_IMAGE)
+    marker = c.state_root / "keep-me"
+    marker.write_text("persistent")
+    docker.commands.clear()
+    progress = []
+    result = ws.rebuild(on_progress=progress.append)
+    assert progress == ["build progress"]
+    assert capsys.readouterr().out == ""
+    build = docker.commands[0]
+    assert build == ["buildx", "build", "--progress=plain", "--platform", "linux/amd64", "--file",
+                     str(tmp_path / "assets/images/android-ws/Dockerfile.android-ws-v2"), "--target", "desktop",
+                     "--load", "--tag", image or DEFAULT_IMAGE, str(tmp_path / "assets/images/android-ws")]
+    stop = docker.commands.index(["stop", c.container_name])
+    remove = docker.commands.index(["rm", c.container_name])
+    create = next(i for i, command in enumerate(docker.commands) if command[:2] == ["run", "-d"])
+    assert 0 < stop < remove < create
+    assert f"type=bind,src={c.workspace_root},dst=/workspace" in docker.commands[create]
+    assert f"type=bind,src={c.state_root},dst=/state" in docker.commands[create]
+    assert marker.read_text() == "persistent"
+    assert result.state == "running"
+
+
+def test_failed_rebuild_does_not_replace_container_or_print(tmp_path, capsys):
+    from dockbench.core.recipes import RecipeCatalog
+    c = config(tmp_path, image="test:image")
+    RecipeCatalog.for_repository(tmp_path).create("android-ws", "FROM scratch", tag="test:image")
+    class Docker(FakeDocker):
+        def run(self, args, **kwargs):
+            if args[:2] == ["buildx", "build"]:
+                kwargs["on_output"]("build failed")
+                raise WorkstationError("build failed")
+            return super().run(args, **kwargs)
+    docker = Docker(c)
+    ws = Workstation(c, docker, FakeInventory())
+    ws.start()
+    docker.commands.clear()
+    progress = []
+    with pytest.raises(WorkstationError, match="build failed"):
+        ws.rebuild(on_progress=progress.append)
+    assert progress == ["build failed"]
+    assert docker.state == "running"
+    assert docker.commands == []
+    assert capsys.readouterr().out == ""

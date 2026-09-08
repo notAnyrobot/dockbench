@@ -17,6 +17,8 @@ from typing import Callable, Iterable, Mapping, Protocol
 
 from dockbench.core.resources import CheckoutResources
 from dockbench.core.defaults import DEFAULT_IMAGE, default_data_mounts, default_state_root, default_workspace_root, workspace_root_from_value
+from dockbench.core.image_builder import ImageBuilder, ImageBuildResult
+from dockbench.core.recipes import RecipeCatalog
 from dockbench.core.errors import DockerCommandError, WorkstationContainerExists, WorkstationError, WorkstationGPUConflict, WorkstationRebuildRequired, WorkstationReplaceRequired
 from dockbench.core.host_inventory import HostInventory
 
@@ -130,8 +132,11 @@ class DesktopEndpoint: host: str; port: int
 
 class Workstation:
     """Deep lifecycle API; HostInventory owns image/GPU discovery and resolution."""
-    def __init__(self, config: WorkstationConfig | None = None, runner: DockerRunner | None = None, inventory: HostInventory | None = None) -> None:
+    def __init__(self, config: WorkstationConfig | None = None, runner: DockerRunner | None = None, inventory: HostInventory | None = None, *,
+                 recipes: RecipeCatalog | None = None, image_builder: ImageBuilder | None = None) -> None:
         self.config = config or WorkstationConfig.from_environment(); self.docker = runner or SubprocessDockerRunner(self.config.docker_command); self.inventory = inventory or HostInventory(self.docker)
+        self.recipes = recipes if recipes is not None else RecipeCatalog.for_repository(self.config.repository_root)
+        self.image_builder = image_builder if image_builder is not None else ImageBuilder(self.docker)
     @contextlib.contextmanager
     def locked(self) -> Iterable[None]:
         self.config.state_root.mkdir(parents=True, exist_ok=True)
@@ -231,14 +236,21 @@ chown "$requested_uid:$requested_gid" /state/.dockbench-bashrc
             self._preflight(spec); self._create(spec)
             if spec.desktop_capable: self._prepare_user()
             return self.status()
-    def build(self, on_progress: Callable[[str], None] | None = None) -> None:
-        image = self.config.image or DEFAULT_IMAGE
-        recipe_dir = CheckoutResources.discover(self.config.repository_root).images / "android-ws"
-        report = on_progress or (lambda line: print(line, flush=True))
-        self.docker.run(["buildx", "build", "--progress=plain", "--platform", "linux/amd64", "--file", str(recipe_dir / "Dockerfile.android-ws-v2"), "--target", "desktop", "--load", "--tag", image, str(recipe_dir)], on_output=report)
-        print(f"{image}: image built")
-    def rebuild(self) -> WorkstationStatus:
-        self.build(); return self.start(image=self.config.image or DEFAULT_IMAGE, replace=True)
+    def build(self, on_progress: Callable[[str], None] | None = None) -> ImageBuildResult:
+        # Rebuild has historically selected these values independently of recipe
+        # defaults. Keep that contract explicit while using the validated context.
+        return self.image_builder.build(
+            self.recipes.get("android-ws"), tag=self.config.image or DEFAULT_IMAGE,
+            target="desktop", platform="linux/amd64", on_progress=on_progress,
+        )
+
+    def rebuild(self, on_progress: Callable[[str], None] | None = None, *,
+                on_built: Callable[[ImageBuildResult], None] | None = None) -> WorkstationStatus:
+        built = self.build(on_progress)
+        if on_built is not None:
+            on_built(built)
+        return self.start(image=built.tag, replace=True)
+
     def enter(self) -> None:
         if self._container_status() != "running": raise WorkstationError(f"{self.config.container_name} is not running; use `dockbench start` first")
         c = self.config

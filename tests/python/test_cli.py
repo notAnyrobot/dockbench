@@ -1,3 +1,4 @@
+from dockbench.core.resources import CheckoutResources
 from types import SimpleNamespace
 from pathlib import Path
 
@@ -111,25 +112,41 @@ def test_shell_requires_a_name_when_multiple_managed_containers_are_running(tmp_
     assert "specify one with `dockbench shell CONTAINER`" in capsys.readouterr().err
 
 
-def test_image_operations_dispatch_and_no_recipe_group(monkeypatch):
+def test_image_build_overrides_and_verify_output(capsys):
     calls = []
-    monkeypatch.setattr(main, "_build_recipe", lambda *args, **kwargs: calls.append(("build", args, {k: v for k, v in kwargs.items() if k != "backend"})) or 0)
-    monkeypatch.setattr(main, "_verify_image", lambda *args, **kwargs: calls.append(("verify", args)) or 0)
-    monkeypatch.setattr(main.archives, "run", lambda *args, **kwargs: calls.append(("archive", args)) or 0)
-    monkeypatch.setattr(main, "_workstation", lambda *args, **kwargs: calls.append(("workstation", args)) or 0)
+    recipe = SimpleNamespace(id="custom", manifest=SimpleNamespace(revision=2))
+    def build(selected, **kwargs):
+        assert selected is recipe
+        kwargs.pop("on_progress")("building")
+        calls.append(kwargs)
+        return SimpleNamespace(tag="custom:v2")
+    backend = SimpleNamespace(
+        recipes=SimpleNamespace(get=lambda recipe_id: recipe),
+        image_builder=SimpleNamespace(build=build),
+        image_verifier=SimpleNamespace(verify=lambda image: SimpleNamespace(image=image, checks=("shell",))),
+    )
     assert main.main(["image", "build", "custom", "--tag", "custom:v2", "--target", "desktop",
-                      "--platform", "linux/arm64", "--no-cache"]) == 0
-    assert main.main(["image", "rebuild"]) == 0
-    assert main.main(["image", "verify", "custom:v2"]) == 0
-    assert main.main(["image", "export", "/tmp/images"]) == 0
-    assert main.main(["image", "import", "one.tar", "two.tar"]) == 0
-    assert calls == [
-        ("build", ("custom",), {"tag": "custom:v2", "target": "desktop", "platform": "linux/arm64", "no_cache": True}),
-        ("workstation", ("rebuild",)),
-        ("verify", ("custom:v2",)),
-        ("archive", ("export", ["/tmp/images"])),
-        ("archive", ("import", ["one.tar", "two.tar"])),
+                      "--platform", "linux/arm64", "--no-cache"], backend=backend) == 0
+    assert calls == [{"tag": "custom:v2", "target": "desktop", "platform": "linux/arm64", "no_cache": True}]
+    assert main.main(["image", "verify", "custom:v2"], backend=backend) == 0
+    assert capsys.readouterr().out.splitlines() == [
+        "building", "custom:v2: image built from custom revision 2", "custom:v2: verified (shell)",
     ]
+
+
+def test_cli_rebuild_streams_progress_before_replacement(tmp_path, capsys):
+    from test_workstation import config, FakeDocker, FakeInventory
+    from dockbench.core.backend import Backend
+    c = config(tmp_path, image="test:image")
+    class Docker(FakeDocker):
+        def run(self, args, **kwargs):
+            if args[:2] == ["run", "-d"]:
+                assert capsys.readouterr().out == "build progress\ntest:image: image built\n"
+            return super().run(args, **kwargs)
+    backend = Backend(config=c, runner=Docker(c))
+    backend.inventory = FakeInventory()
+    backend.recipes.create("android-ws", "FROM scratch", tag="other:tag")
+    assert main.main(["image", "rebuild"], backend=backend) == 0
 
 
 def test_image_build_streams_plain_progress_to_cli(monkeypatch, capsys):
@@ -204,14 +221,14 @@ def test_installed_checkout_finds_recipes_from_other_directory(tmp_path, entrypo
                else [sys.executable, "-m", "dockbench.cli.main"])
     command += ["image", "build", "android-ws"]
     environment = dict(os.environ, DOCKBENCH_DOCKER=str(
-        main.RESOURCES.repository_root / "tests/helpers/fake-docker"),
+        CheckoutResources.discover().repository_root / "tests/helpers/fake-docker"),
         FAKE_DOCKER_LOG=str(tmp_path / "docker.log"),
         FAKE_DOCKER_STATE=str(tmp_path / "docker.state"))
-    for cwd in (main.RESOURCES.repository_root, tmp_path):
+    for cwd in (CheckoutResources.discover().repository_root, tmp_path):
         result = subprocess.run(command, cwd=cwd, env=environment, capture_output=True, text=True)
         assert result.returncode == 0, result.stderr
         assert "image built from android-ws revision 2" in result.stdout
-    assert str(main.RESOURCES.images / "android-ws") in (tmp_path / "docker.log").read_text()
+    assert str(CheckoutResources.discover().images / "android-ws") in (tmp_path / "docker.log").read_text()
 
 
 def test_runtime_config_is_loaded_before_app_settings(tmp_path, monkeypatch):
@@ -227,7 +244,7 @@ def test_runtime_config_is_loaded_before_app_settings(tmp_path, monkeypatch):
     workspace.mkdir()
     config = tmp_path / 'server.json'
     config.write_text(json.dumps({'environment': {'DOCKBENCH_WORKSPACE': str(workspace),
-                                                 'DOCKBENCH_DOCKER': str(main.RESOURCES.repository_root / 'tests/helpers/fake-docker')}}))
+                                                 'DOCKBENCH_DOCKER': str(CheckoutResources.discover().repository_root / 'tests/helpers/fake-docker')}}))
     monkeypatch.setenv('DOCKBENCH_WORKSPACE', '/missing/workspace')
     monkeypatch.setenv('DOCKBENCH_DOCKER', '/missing/docker')
     monkeypatch.setattr(serve, 'RESOURCES', CheckoutResources.discover(root))

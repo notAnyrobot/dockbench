@@ -54,7 +54,8 @@ class Backend:
 
     @cached_property
     def workstation(self) -> Workstation:
-        return Workstation(self.config, runner=self._runner, inventory=self.inventory)
+        return Workstation(self.config, runner=self._runner, inventory=self.inventory,
+                           recipes=self.recipes, image_builder=self.image_builder)
 
     @cached_property
     def fleet(self) -> FleetManager:
