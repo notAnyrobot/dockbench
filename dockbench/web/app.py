@@ -332,7 +332,10 @@ def create_app(workstation: Workstation | None = None, fleet: Any | None = None,
         return {"status": "ok"}
 
     def ws() -> Workstation:
-        return app.state.workstation or Workstation()
+        if app.state.workstation is not None:
+            return app.state.workstation
+        from dockbench.core.workstation import WorkstationConfig
+        return Workstation(WorkstationConfig.from_environment(resources.repository_root))
 
     def managed_fleet() -> Any:
         """Return the shared fleet manager without making legacy callers pay for it.

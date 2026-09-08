@@ -545,3 +545,20 @@ def test_frontend_uses_explicit_checkout_outside_working_directory(tmp_path, mon
     assert client.get("/api/health").json() == {"status": "ok"}
     assert client.get("/nested/route").text == "checkout frontend"
     assert client.get("/assets/app.js").text == "checkout asset"
+
+
+def test_explicit_checkout_also_selects_default_backend_recipes(tmp_path, monkeypatch):
+    from pathlib import Path
+
+    fake_docker = Path(__file__).resolve().parents[1] / "helpers/fake-docker"
+    monkeypatch.setenv("DOCKBENCH_DOCKER", str(fake_docker))
+    monkeypatch.setenv("DOCKBENCH_WORKSPACE", str(tmp_path))
+    monkeypatch.setenv("FAKE_DOCKER_LOG", str(tmp_path / "docker.log"))
+    root = tmp_path / "empty-checkout"
+    (root / "assets/images").mkdir(parents=True)
+    client = TestClient(create_app(repository_root=root))
+
+    response = client.get("/api/image-recipes")
+
+    assert response.status_code == 200
+    assert response.json()["recipes"] == []
