@@ -9,18 +9,15 @@ import os
 import pty
 import secrets
 import struct
-import tempfile
 import termios
 import time
-import uuid
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable
 
 from fastapi import Cookie, FastAPI, HTTPException, Request, Response, WebSocket, WebSocketDisconnect
 from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import FileResponse, JSONResponse
-from starlette.background import BackgroundTask
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
@@ -35,12 +32,14 @@ from dockbench.core.workstation import (
     WorkstationReplaceRequired,
 )
 
+from dockbench.web.image_jobs import ImageJobs
+from dockbench.web.archives import register_archive_routes
+
 from dockbench.web.security import (safe_error, _require_csrf, _issue_csrf,
-    _redact_image_log, _safe_docker_error, install_security)
+    _redact_image_log, install_security)
 
 LOG = logging.getLogger(__name__)
 SESSION_TTL_SECONDS = 60
-MAX_IMAGE_JOB_LOG_LINES = 2000
 
 
 @dataclass
@@ -58,15 +57,6 @@ class TerminalSession:
     used: bool = False
 
 
-@dataclass
-class ImageJob:
-    id: str
-    kind: str
-    state: str = "running"
-    message: str = ""
-    created_at: float = 0
-    logs: list[str] = field(default_factory=list)
-    code: str | None = None
 
 
 class SessionRequest(BaseModel):
@@ -184,8 +174,7 @@ def create_app(workstation: Workstation | None = None, fleet: Any | None = None,
     app.state.terminal_sessions = TerminalSessions()
     app.state.desktop_sockets: set[WebSocket] = set()
     app.state.desktop_socket_containers: dict[WebSocket, str] = {}
-    app.state.image_jobs: dict[str, ImageJob] = {}
-    app.state.image_job_lock = asyncio.Lock()
+    jobs = ImageJobs(app)
     app.state.recipes = recipes
     app.state.image_builder = image_builder
     app.state.image_verifier = image_verifier
@@ -422,46 +411,6 @@ def create_app(workstation: Workstation | None = None, fleet: Any | None = None,
         except Exception as exc:
             return safe_error(exc)
 
-    def start_image_job(kind: str, operation: Callable[[Callable[[str], None]], Any]) -> ImageJob:
-        queued = app.state.image_job_lock.locked()
-        job = ImageJob(uuid.uuid4().hex, kind, state="queued" if queued else "running",
-                       message="Waiting for another image operation." if queued else "Starting image operation.",
-                       created_at=time.time(), logs=["queued" if queued else "starting"])
-        app.state.image_jobs[job.id] = job
-
-        def report(value: str) -> None:
-            lines = _redact_image_log(value).splitlines() or [""]
-            job.logs.extend(lines)
-            if len(job.logs) > MAX_IMAGE_JOB_LOG_LINES:
-                del job.logs[:-MAX_IMAGE_JOB_LOG_LINES]
-
-        async def run() -> None:
-            async with app.state.image_job_lock:
-                job.state = "running"
-                job.message = "Image operation is running."
-                report("running")
-                try:
-                    output = await run_in_threadpool(operation, report)
-                except Exception as exc:
-                    LOG.warning("image job failed id=%s kind=%s error=%s", job.id, kind, type(exc).__name__)
-                    job.state = "failed"
-                    if isinstance(exc, DockerCommandError):
-                        job.code = "docker_error"
-                        job.message = _safe_docker_error(str(exc))
-                        report(job.message)
-                    else:
-                        job.message = "Image operation failed. Check Dockbench logs and try again."
-                    report("failed")
-                else:
-                    if isinstance(output, str) and output:
-                        report(output)
-                    job.state = "completed"
-                    job.message = "Image operation completed."
-                    report("completed")
-
-        asyncio.create_task(run())
-        return job
-
     @app.post("/api/images/build")
     async def build_image(body: ImageBuildRequest, request: Request, dockbench_csrf: str | None = Cookie(default=None)):
         _require_csrf(request, dockbench_csrf)
@@ -475,7 +424,7 @@ def create_app(workstation: Workstation | None = None, fleet: Any | None = None,
                 return recipe_builder().build(recipe, no_cache=body.no_cache,
                                               on_progress=report, **overrides)
 
-            job = start_image_job("no-cache build" if body.no_cache else "build", build)
+            job = jobs.start("no-cache build" if body.no_cache else "build", build)
             return {"id": job.id, "kind": job.kind, "state": job.state}
         except Exception as exc:
             return safe_error(exc)
@@ -484,62 +433,12 @@ def create_app(workstation: Workstation | None = None, fleet: Any | None = None,
     async def verify_image(image_id: str, request: Request, dockbench_csrf: str | None = Cookie(default=None)):
         _require_csrf(request, dockbench_csrf)
         try:
-            job = start_image_job("verify", lambda _report: image_verifier_capability().verify(image_id))
+            job = jobs.start("verify", lambda _report: image_verifier_capability().verify(image_id))
             return {"id": job.id, "kind": job.kind, "state": job.state}
         except Exception as exc:
             return safe_error(exc)
 
-    @app.get("/api/image-jobs/{job_id}")
-    async def image_job(job_id: str):
-        job = app.state.image_jobs.get(job_id)
-        if job is None:
-            raise HTTPException(404, "Image job not found")
-        return {"id": job.id, "kind": job.kind, "state": job.state, "message": job.message,
-                "code": job.code, "created_at": job.created_at, "logs": job.logs}
-
-    @app.post("/api/images/load")
-    async def load_image(request: Request, dockbench_csrf: str | None = Cookie(default=None)):
-        _require_csrf(request, dockbench_csrf)
-        temporary = tempfile.NamedTemporaryFile(prefix="dockbench-image-", suffix=".tar", delete=False)
-        temporary_path = Path(temporary.name)
-        try:
-            async for chunk in request.stream():
-                temporary.write(chunk)
-            temporary.close()
-            if temporary_path.stat().st_size == 0:
-                temporary_path.unlink(missing_ok=True)
-                raise HTTPException(422, "Image archive is empty")
-
-            def load(_report: Callable[[str], None]) -> None:
-                try:
-                    return backend.load_image(temporary_path)
-                finally:
-                    temporary_path.unlink(missing_ok=True)
-
-            job = start_image_job("load", load)
-            return {"id": job.id, "kind": job.kind, "state": job.state}
-        except HTTPException:
-            raise
-        except Exception as exc:
-            temporary.close()
-            temporary_path.unlink(missing_ok=True)
-            return safe_error(exc)
-
-    @app.get("/api/images/{image_id}/package")
-    async def package_image(image_id: str):
-        temporary_path: Path | None = None
-        try:
-            image = await run_in_threadpool(backend.inventory.resolve_image, image_id)
-            temporary = tempfile.NamedTemporaryFile(prefix="dockbench-image-", suffix=".tar", delete=False)
-            temporary_path = Path(temporary.name)
-            temporary.close()
-            await run_in_threadpool(backend.save_image, image.id, temporary_path)
-            filename = f"{image.display_reference.replace('/', '_').replace(':', '_')}.tar"
-            return FileResponse(temporary_path, media_type="application/x-tar", filename=filename, background=BackgroundTask(temporary_path.unlink, missing_ok=True))
-        except Exception as exc:
-            if temporary_path is not None:
-                temporary_path.unlink(missing_ok=True)
-            return safe_error(exc)
+    register_archive_routes(app, backend, jobs)
 
     @app.post("/api/workstation/start")
     async def start_workstation(request: Request, body: StartRequest | None = None, dockbench_csrf: str | None = Cookie(default=None)):

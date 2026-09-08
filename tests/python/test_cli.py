@@ -154,7 +154,7 @@ def test_image_operations_dispatch_and_no_recipe_group(monkeypatch):
     calls = []
     monkeypatch.setattr(main, "_build_recipe", lambda *args, **kwargs: calls.append(("build", args, {k: v for k, v in kwargs.items() if k != "backend"})) or 0)
     monkeypatch.setattr(main, "_verify_image", lambda *args, **kwargs: calls.append(("verify", args)) or 0)
-    monkeypatch.setattr(main, "_package_images", lambda *args, **kwargs: calls.append(("archive", args)) or 0)
+    monkeypatch.setattr(main.archives, "run", lambda *args, **kwargs: calls.append(("archive", args)) or 0)
     monkeypatch.setattr(main, "_workstation", lambda *args, **kwargs: calls.append(("workstation", args)) or 0)
     assert main.main(["image", "build", "custom", "--tag", "custom:v2", "--target", "desktop",
                       "--platform", "linux/arm64", "--no-cache"]) == 0

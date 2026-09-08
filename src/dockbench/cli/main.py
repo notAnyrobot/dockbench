@@ -2,11 +2,10 @@
 from __future__ import annotations
 
 import argparse
-import subprocess
 import sys
 from typing import Sequence
 
-from dockbench.cli import connect, deploy, serve, server
+from dockbench.cli import archives, connect, deploy, serve, server
 
 from dockbench.core.resources import CheckoutResources
 from dockbench.core.backend import Backend
@@ -58,18 +57,6 @@ def _workstation(action: str, image: str | None = None, gpus: list[str] | None =
     except WorkstationError as exc:
         return _fail(str(exc))
 
-
-def _package_images(action: str, paths: list[str], *, backend: Backend | None = None) -> int:
-    try:
-        backend = backend if backend is not None else Backend()
-        if action == "export":
-            result = backend.images.package(paths[0] if paths else None)
-            print(f"Created:\n  {result.archive}")
-            return 0
-        backend.images.load(paths)
-        return 0
-    except (OSError, subprocess.CalledProcessError, WorkstationError) as exc:
-        return _fail(str(exc))
 
 
 def _build_recipe(recipe_id: str, *, tag: str | None = None, target: str | None = None,
@@ -128,10 +115,7 @@ def parser() -> argparse.ArgumentParser:
     image_actions.add_parser("rebuild", help="Build the image, replace the container, and start it again.")
     verify = image_actions.add_parser("verify", help="Verify an image's advertised workstation capabilities.")
     verify.add_argument("image", help="Local image reference or id to verify.")
-    export = image_actions.add_parser("export", help="Save the desktop image as a Docker tar file.")
-    export.add_argument("directory", nargs="?")
-    image_import = image_actions.add_parser("import", help="Load one or more Docker image tar files.")
-    image_import.add_argument("tarfile", nargs="+")
+    archives.register(image_actions)
     return command
 
 
@@ -159,8 +143,8 @@ def main(argv: Sequence[str] | None = None, *, backend: Backend | None = None) -
         if arguments.image_action == "verify":
             return _verify_image(arguments.image, backend=backend)
         if arguments.image_action == "export":
-            return _package_images("export", [arguments.directory] if arguments.directory else [], backend=backend)
-        return _package_images("import", arguments.tarfile, backend=backend)
+            return archives.run("export", [arguments.directory] if arguments.directory else [], backend=backend)
+        return archives.run("import", arguments.tarfile, backend=backend)
     return 2
 
 

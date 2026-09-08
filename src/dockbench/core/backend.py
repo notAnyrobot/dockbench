@@ -71,12 +71,6 @@ class Backend:
     def image_verifier(self) -> ImageVerifier:
         return ImageVerifier(self._runner)
 
-    def load_image(self, path: Path) -> str:
-        return self._runner.run(['image', 'load', '--input', str(path)], capture=True)
-
-    def save_image(self, image: str, path: Path) -> None:
-        self._runner.run(['image', 'save', '--output', str(path), image])
-
     @cached_property
     def images(self) -> WorkstationImages:
         # CLI archives inherit both streams and retain CalledProcessError
@@ -86,6 +80,7 @@ class Backend:
             self.docker_command,
             self._config.image if self._config is not None else self._environment.get('DOCKBENCH_IMAGE', DEFAULT_IMAGE),
             run=partial(subprocess.run, env=self._environment), runner=self._archive_runner,
+            capture_runner=self._runner, inventory=self.inventory,
         )
 
     def host_defaults(self) -> dict[str, str | None]:
