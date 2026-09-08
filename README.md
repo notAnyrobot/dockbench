@@ -29,9 +29,12 @@ Run the repository and application checks:
 
 ```bash
 bash tests/check-context.sh
-uv run pytest
+uv run --frozen --group dev python -m pytest
 npm --prefix src/dockbench/web/frontend test
 ```
+
+See [architecture and contributor checks](docs/architecture.md) for module ownership,
+cleanup responsibilities, and the complete validation workflow.
 
 The editable installation uses `src/dockbench` directly. From another directory,
 use `/path/to/dockbench/.venv/bin/dockbench` or

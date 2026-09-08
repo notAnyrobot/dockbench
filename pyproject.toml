@@ -4,6 +4,7 @@ version = "0.1.0"
 description = "Browser workbench for managed development containers on Docker hosts"
 requires-python = ">=3.12,<3.13"
 dependencies = [
+  "anyio>=4,<5",
   "fastapi>=0.115,<1",
   "uvicorn[standard]>=0.30,<1",
 ]

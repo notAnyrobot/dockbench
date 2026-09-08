@@ -16,11 +16,9 @@ from dockbench.web.image_jobs import ImageJobs
 from dockbench.web.archives import register_archive_routes
 from dockbench.web.recipes import register_recipe_routes
 
-from dockbench.web.security import _redact_image_log, install_security
+from dockbench.web.security import install_security
 
-from dockbench.web.sessions import DesktopSessions
 from dockbench.web.access import register_access_routes
-
 
 
 def create_app(workstation: Workstation | None = None, fleet: Any | None = None,
