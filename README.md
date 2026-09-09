@@ -242,3 +242,17 @@ Historical UX and planning inputs remain in
 The runtime and historical design inputs were imported from
 [`notAnyrobot/awesome-robotics`](https://github.com/notAnyrobot/awesome-robotics)
 commits `4765bef`, `060758f`, and `0b25b71`.
+
+### Browser desktop clipboard
+
+Open a desktop and connect with its existing VNC password, then select
+**Clipboard** in the toolbar. Paste host text into **Outgoing text** and click
+**Send to desktop**. This sets the remote clipboard only; choose Paste inside
+the remote application yourself. Sending never presses keys or executes commands.
+
+Copy text within the remote desktop to populate **Incoming remote text**, then
+click **Copy to host**. If browser clipboard access is unavailable or denied,
+select the incoming text and copy it manually. Text stays in memory and clears
+when the connection ends or changes; sending and host copying are disabled while
+disconnected. Dockbench does not continuously read or write your host clipboard.
+No image rebuild, container recreation, or desktop configuration change is needed.

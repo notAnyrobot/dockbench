@@ -120,3 +120,7 @@ tbody tr.selected{
 /* Dock maximize keeps the global header while dedicating the remaining viewport to the active dock. */
 .dock-actions{display:flex;align-items:center;gap:6px;margin-left:auto}.dock-actions .clear-activity{margin-left:0}.dock-maximize{display:inline-grid;place-items:center;width:29px;height:29px;padding:0;border-color:transparent;background:transparent;font-size:16px;line-height:1}.dock-maximize:hover:not(:disabled){border-color:#4a4a4a;background:#202020}
 .orchestrator.dock-maximized{grid-template-columns:minmax(0,1fr);grid-template-rows:60px minmax(0,1fr)}.orchestrator.dock-maximized .inspector,.orchestrator.dock-maximized .inventory-panel,.orchestrator.dock-maximized .column-resizer,.orchestrator.dock-maximized .row-resizer{display:none}.orchestrator.dock-maximized .terminal-dock{grid-row:2}
+
+.clipboard-panel{position:absolute;z-index:5;top:64px;right:12px;width:min(420px,calc(100vw - 24px));max-height:calc(100vh - 80px);overflow:auto;padding:16px;border:1px solid #555;background:var(--nv-panel);box-shadow:0 8px 32px #0008}
+.clipboard-panel h2{margin:0 0 12px}.clipboard-panel label{display:block;margin:12px 0 8px}.clipboard-panel textarea{display:block;width:100%;min-height:120px;margin-top:6px;padding:8px;resize:vertical;background:#0e0e0e;color:inherit;border:1px solid #555;font-family:monospace;white-space:pre}
+.clipboard-panel p{font-size:12px;line-height:1.5;color:#ccc}.clipboard-panel [role=status]{color:var(--nv-green)}
