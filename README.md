@@ -239,8 +239,8 @@ installed metadata under `$XDG_STATE_HOME/dockbench/server` (default
 `~/.local/state/dockbench/server`). Only existing allowlisted environment settings
 are saved; credentials do not belong in YAML or the runtime snapshot. New service
 launch definitions use `server start --foreground` with the effective snapshot.
-Dockbench 2.0 removes the old top-level `deploy`, `serve`, and `connect` aliases.
-See [Migrating to 2.0](docs/migration-2.0.md) before updating scripts or older services.
+Dockbench 1.0 removes the old top-level `deploy`, `serve`, and `connect` aliases.
+See [Migrating to 1.0](docs/migration-1.0.md) before updating scripts or older services.
 
 Open an existing local server, or supply an explicit SSH host for remote access:
 
