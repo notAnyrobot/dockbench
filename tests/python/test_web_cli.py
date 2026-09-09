@@ -128,13 +128,13 @@ def test_local_browser_exception_leaves_manual_url_and_success(monkeypatch, caps
     assert 'Dockbench: http://127.0.0.1:8787' in capsys.readouterr().out
 
 
-def test_connect_alias_is_hidden_deprecated_and_browser_opt_in(monkeypatch, capsys):
+def test_web_supports_explicit_no_browser_for_migrated_scripts(monkeypatch, capsys):
     events, commands, process = ssh_host(monkeypatch)
     assert main([]) == 0
     assert '\n    connect ' not in capsys.readouterr().out
-    assert main(['connect', 'gpu', '--local-port', '19403', '--remote-port', '9403']) == 0
+    assert main(['web', 'gpu', '--local-port', '19403', '--port', '9403', '--no-open']) == 0
     output = capsys.readouterr()
-    assert 'deprecated' in output.err and 'dockbench web' in output.err
+    assert not output.err
     assert events == [('health', 'http://127.0.0.1:19403/api/health')]
     assert '127.0.0.1:19403:127.0.0.1:9403' in commands[0]
 

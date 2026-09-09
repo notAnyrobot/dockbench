@@ -108,7 +108,7 @@ main() {
 
   printf '\nDockbench prerequisites are ready.\n'
   printf '  %s\n' "$(uv --version)" "node $(node --version)" "npm $(npm --version)" "docker available"
-  printf '\nDeploy Dockbench with:\n  uv run dockbench deploy\n'
+  printf '\nDeploy Dockbench with:\n  uv run dockbench server deploy\n'
   printf 'Open a new shell (or source %s) if uv or nvm is not yet on its PATH.\n' "$profile_file"
 }
 

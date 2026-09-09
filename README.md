@@ -239,9 +239,8 @@ installed metadata under `$XDG_STATE_HOME/dockbench/server` (default
 `~/.local/state/dockbench/server`). Only existing allowlisted environment settings
 are saved; credentials do not belong in YAML or the runtime snapshot. New service
 launch definitions use `server start --foreground` with the effective snapshot.
-The hidden deprecated `deploy` and `serve` aliases remain available with migration
-guidance on stderr. Legacy `serve --config` still means the old JSON runtime file,
-while canonical `--config` selects host YAML.
+Dockbench 2.0 removes the old top-level `deploy`, `serve`, and `connect` aliases.
+See [Migrating to 2.0](docs/migration-2.0.md) before updating scripts or older services.
 
 Open an existing local server, or supply an explicit SSH host for remote access:
 
@@ -268,9 +267,8 @@ Dockbench and press Ctrl+C to close it. Interactive SSH authentication retains
 its normal prompts. The server and tunnel bind only to `127.0.0.1`.
 
 If browser launch fails, open the printed URL manually; the remote tunnel stays
-available until interrupted. The hidden deprecated `connect` alias retains
-`--remote-port` and its opt-in `--open-browser` default. Migrate scripts to
-`web HOST --port PORT --no-open` to retain that browser behavior.
+available until interrupted. Use `web HOST --port PORT --no-open` in scripts
+that should keep browser opening disabled.
 
 ### Rootless Docker with NVIDIA GPUs
 

@@ -1,6 +1,5 @@
 """CLI deploy command ownership."""
 import argparse
-import sys
 from pathlib import Path
 
 from dockbench.cli.common import fail as _fail, port as _port
@@ -41,8 +40,6 @@ def _deploy(port: int | None = None, workspace_root: str | None = None,
         return _fail(str(exc))
 
 def run(args: argparse.Namespace) -> int:
-    if args.command == "deploy":
-        print("`dockbench deploy` is deprecated; use `dockbench server deploy`.", file=sys.stderr)
     return _deploy(args.port, args.workspace, args.state_root, args.docker_command, args.config)
 
 def add_configuration_arguments(deploy) -> None:
@@ -53,7 +50,7 @@ def add_configuration_arguments(deploy) -> None:
     deploy.add_argument("--docker-command", help="Docker-compatible command used on the remote host.")
     deploy.add_argument("--config", help="Host YAML configuration file.")
 
-def register(actions, *, hidden: bool = True) -> None:
-    deploy = actions.add_parser("deploy", **({} if hidden else {"help": "Build and deploy Dockbench on this Docker host."}))
+def register(actions) -> None:
+    deploy = actions.add_parser("deploy", help="Build and deploy Dockbench on this Docker host.")
     add_configuration_arguments(deploy)
     deploy.set_defaults(handler=run)

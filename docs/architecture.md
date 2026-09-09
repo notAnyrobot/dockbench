@@ -34,7 +34,7 @@ A wheel without the accompanying checkout assets is not a deployment target.
 - `web/app.py` composes the HTTP application. Route modules adapt requests;
   `image_jobs.py` owns serialized jobs and temporary-upload cleanup; `sessions.py`
   owns expiring single-use tokens; `access.py` and `terminal.py` own socket and
-  PTY transport lifetime. `web/server.py` starts the server for canonical foreground startup, legacy CLI `serve`
+  PTY transport lifetime. `web/server.py` starts the server for canonical foreground startup
   and `python -m dockbench.web`.
 
 Shared modules import neither adapter, and web does not import CLI. Backend
