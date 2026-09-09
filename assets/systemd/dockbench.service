@@ -4,7 +4,7 @@ After=default.target
 
 [Service]
 Type=simple
-WorkingDirectory=__SERVER_ROOT__
+WorkingDirectory=__SERVER_WORKING_DIRECTORY__
 EnvironmentFile=__SERVER_ENV_FILE__
 ExecStart=:__UV_EXECUTABLE__ run --frozen --no-sync --project __SERVER_ROOT__ dockbench server start --foreground --port __SERVER_PORT__ --runtime-config __SERVER_CONFIG__
 # uv forwards systemd's SIGTERM to the server and then exits with 128 + SIGTERM.

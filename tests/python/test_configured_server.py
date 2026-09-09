@@ -3,6 +3,8 @@ import shutil
 import subprocess
 import urllib.request
 
+import pytest
+
 from dockbench.cli.main import main
 from dockbench.cli import deploy
 from dockbench.core.resources import CheckoutResources
@@ -180,3 +182,35 @@ def test_invalid_desired_config_fails_before_build_or_metadata_changes(tmp_path,
     assert 'server.port' in capsys.readouterr().err
     assert not (tmp_path / 'state').exists()
     assert not (tmp_path / 'xdg').exists()
+
+
+@pytest.mark.parametrize("directory", ["host", "space $dollar %percent", "unicode-中文"])
+def test_deployed_unit_is_accepted_by_systemd_parser(tmp_path, monkeypatch, directory):
+    analyzer = shutil.which("systemd-analyze")
+    if analyzer is None:
+        pytest.skip("systemd-analyze is unavailable on this host")
+    real_run = subprocess.run
+    checkout(tmp_path / directory, monkeypatch)
+    executable = shutil.which("true")
+    monkeypatch.setattr(shutil, "which", lambda name: executable)
+    monkeypatch.setattr(subprocess, "run", lambda command, **kwargs: subprocess.CompletedProcess(command, 0, "", ""))
+    monkeypatch.setattr(urllib.request, "urlopen", lambda *args, **kwargs: Healthy())
+
+    assert main(["server", "deploy"]) == 0
+
+    unit_path = tmp_path / directory / "xdg/systemd/user/dockbench.service"
+    result = real_run([analyzer, "verify", str(unit_path)], capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr
+    # EnvironmentFile warnings can be ignored by systemd with a zero exit code.
+    assert not result.stderr, result.stderr
+
+
+def test_deploy_rejects_a_line_break_in_a_systemd_path(tmp_path, monkeypatch, capsys):
+    checkout(tmp_path / 'line\nbreak', monkeypatch)
+    monkeypatch.setattr(shutil, 'which', lambda name: '/usr/bin/true')
+    monkeypatch.setattr(subprocess, 'run', lambda command, **kwargs: subprocess.CompletedProcess(command, 0, '', ''))
+    monkeypatch.setattr(urllib.request, 'urlopen', lambda *args, **kwargs: Healthy())
+
+    assert main(['server', 'deploy']) == 1
+    assert 'systemd path' in capsys.readouterr().err
+    assert not (tmp_path / 'line\nbreak/xdg/systemd/user/dockbench.service').exists()

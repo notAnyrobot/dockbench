@@ -239,6 +239,7 @@ class ServerDeployment:
         except OSError as exc:
             raise DeploymentError(f"cannot read Dockbench service template: {template_path}") from exc
         substitutions = {
+            "__SERVER_WORKING_DIRECTORY__": str(self.options.repository_root),
             "__SERVER_ROOT__": str(self.options.repository_root),
             "__UV_EXECUTABLE__": uv,
             "__SERVER_CONFIG__": str(self.config_path),
@@ -246,7 +247,14 @@ class ServerDeployment:
             "__SERVER_PORT__": str(self.options.port),
         }
         for old, new in substitutions.items():
-            template = template.replace(old, new if old == "__SERVER_PORT__" else json.dumps(new).replace("%", "%%"))
+            # Path directives consume the entire value literally, unlike ExecStart
+            # arguments. Quote only command arguments; escape specifiers in both.
+            if old in {"__SERVER_WORKING_DIRECTORY__", "__SERVER_ENV_FILE__"}:
+                if any(character in new for character in "\x00\r\n"):
+                    raise DeploymentError("systemd paths cannot contain NUL or line breaks")
+            elif old != "__SERVER_PORT__":
+                new = json.dumps(new)
+            template = template.replace(old, new.replace("%", "%%"))
         self._mkdir_private(self.unit_path.parent)
         self._write_private(self.unit_path, template)
         for command in (
