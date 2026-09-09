@@ -16,7 +16,6 @@ grep -F 'stop' "$temporary_dir/server-help" >/dev/null
 
 uv run --no-sync dockbench deploy --help >"$temporary_dir/deploy-help"
 grep -F -- '--workspace' "$temporary_dir/deploy-help" >/dev/null
-! grep -F -- '--workspace' "$temporary_dir/deploy-help" >/dev/null
 
 FAKE_DOCKER_LOG="$temporary_dir/docker.log" FAKE_DOCKER_STATE="$temporary_dir/docker.state" \
   DOCKBENCH_DOCKER="$PWD/tests/helpers/fake-docker" \

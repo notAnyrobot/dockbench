@@ -5,7 +5,8 @@ import pytest
 
 from dockbench.core.errors import WorkstationContainerExists, WorkstationError
 from dockbench.core.host_inventory import GPU, LocalImage
-from dockbench.core.workstation import FleetManager, WorkstationConfig
+from dockbench.core.fleet import FleetManager
+from dockbench.core.workstation import WorkstationConfig
 
 
 class Inventory:
@@ -118,9 +119,7 @@ def test_fleet_enters_a_named_managed_container(tmp_path):
     docker = Docker(); fleet = FleetManager(config(tmp_path), docker, Inventory())
     fleet.create("workstation-8gpu", "demo:image")
 
-    fleet.enter("workstation-8gpu")
-
-    command = next(command for command in reversed(docker.commands) if command[:2] == ["exec", "-it"])
+    command = fleet.shell("workstation-8gpu").arguments
     assert "workstation-8gpu" in command
 
 
@@ -219,3 +218,18 @@ def test_fleet_never_adopts_the_former_default_container_name(tmp_path):
 
     with pytest.raises(WorkstationError, match="not managed"):
         FleetManager(config(tmp_path), docker, Inventory()).container("docker-ws")
+
+
+def test_shell_selection_prefers_default_then_sole_running_and_rejects_ambiguity(tmp_path):
+    docker = Docker()
+    fleet = FleetManager(config(tmp_path), docker, Inventory())
+    fleet.create("one", "demo:image")
+    assert "one" in fleet.shell().arguments
+    fleet.create("two", "demo:image")
+    with pytest.raises(WorkstationError, match="specify one"):
+        fleet.shell()
+    fleet.create("dockbench", "demo:image")
+    docker.commands.clear()
+    assert "dockbench" in fleet.shell().arguments
+    docker.commands.clear()
+    assert "two" in fleet.shell("two").arguments

@@ -15,7 +15,7 @@ from dockbench.core.server_deployment import (
 
 def _deployment(tmp_path: Path) -> ServerDeployment:
     root = tmp_path / "repo"
-    (root / "apps/workbench").mkdir(parents=True)
+    (root / "src/dockbench/web/frontend").mkdir(parents=True)
     workspace_root = tmp_path / "workspace"
     workspace_root.mkdir()
     (root / "assets/systemd").mkdir(parents=True)
@@ -115,8 +115,8 @@ def test_deploy_builds_before_install_and_systemd_unit_uses_serve(tmp_path, monk
 
     assert commands[:3] == [
         (["/bin/uv", "sync", "--frozen"], deployment.options.repository_root),
-        (["/bin/npm", "ci"], deployment.options.repository_root / "apps/workbench"),
-        (["/bin/npm", "run", "build"], deployment.options.repository_root / "apps/workbench"),
+        (["/bin/npm", "ci"], deployment.options.repository_root / "src/dockbench/web/frontend"),
+        (["/bin/npm", "run", "build"], deployment.options.repository_root / "src/dockbench/web/frontend"),
     ]
     unit = result.unit_path.read_text()
     assert "dockbench serve --port 8787 --config" in unit
