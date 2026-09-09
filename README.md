@@ -23,10 +23,11 @@ terminal and return to the checkout before continuing.
 
 ### 2. Deploy and open the workbench
 
-On the Docker host:
+On the Docker host, create a workspace root (or use an existing project directory):
 
 ```bash
-uv run dockbench server deploy
+mkdir -p "$HOME/workspace"
+uv run dockbench server deploy --workspace "$HOME/workspace"
 uv run dockbench web
 ```
 
