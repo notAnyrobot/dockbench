@@ -86,7 +86,11 @@ requires `--replace`, which retains the workspace mount and `/state` but discard
 container filesystem. Containers run as root, so files created in a workspace root
 may become root-owned on the host.
 
-`dockbench shell CONTAINER` enters a managed container created in the browser.
+`dockbench shell CONTAINER` enters a managed container as root, matching browser
+terminals. Both start in `/workspace`, using Bash when available or `/bin/sh`
+otherwise. Shell entry does not provision or select the host user. The VNC desktop
+keeps its configured host user and persistent `/state/home`; this shell policy does
+not change desktop identity or settings.
 Without a name, `shell` uses the configured default container when it is running,
 or the sole running managed container. If several are running, specify the name.
 

@@ -22,8 +22,9 @@ A wheel without the accompanying checkout assets is not a deployment target.
   selection, mounts, persisted state, managed labels, and GPU reservations.
   Configured-default and named-container selection retain their distinct policies.
 - `core/access.py` prepares shell execution and desktop access, including user
-  identity and password provisioning. CLI host-user shells for desktop-capable
-  images and browser root shells intentionally differ.
+  identity and password provisioning for VNC. CLI and browser terminals share root
+  shell preparation, `/workspace`, and the Bash-or-shell fallback; desktop access
+  retains the configured host user and persistent home.
 - `core/server_deployment.py` and `server_connection.py` own checkout deployment,
   readiness, saved configuration, process/systemd lifecycle, and SSH connections.
 - `cli` adapts argparse requests into operations and owns output, exit status,

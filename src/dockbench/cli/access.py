@@ -38,13 +38,18 @@ def desktop(backend: Backend) -> None:
 
 def register(actions: argparse._SubParsersAction) -> None:
     shell = actions.add_parser(
-        "shell", help="Open Bash in a running managed container as the host user."
+        "shell",
+        help="Open a shell in a running managed container as root.",
+        description=(
+            "Open a shell as root in /workspace, using Bash when available or /bin/sh. "
+            "The VNC desktop retains its configured host user and persistent home."
+        ),
     )
     shell.add_argument(
         "container",
         nargs="?",
         metavar="CONTAINER",
-        help="Managed container name; defaults to the sole running container.",
+        help="Managed container name; defaults to the running configured default or sole running container.",
     )
     actions.add_parser(
         "desktop", help="Provision VNC if needed and open the native viewer."

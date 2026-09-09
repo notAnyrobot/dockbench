@@ -76,3 +76,49 @@ def test_shell_preserves_long_configured_default_but_validates_explicit_names(tm
     assert any(command[:2] == ["exec", "-it"] and name in command for command in docker.commands)
     assert main(["shell", name], backend=backend) == 1
     assert "container names must be 1–63" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("desktop_contract", ["v1", None])
+def test_cli_shell_uses_root_without_provisioning_desktop_user(tmp_path, desktop_contract):
+    docker = Docker()
+    backend = Backend(config=config(tmp_path), runner=docker)
+    inventory = Inventory()
+    inventory.image = replace(inventory.image, desktop_contract=desktop_contract)
+    backend.inventory = inventory
+    backend.fleet.create("selected", "demo:image")
+    docker.commands.clear()
+
+    assert main(["shell", "selected"], backend=backend) == 0
+
+    executions = [command for command in docker.commands if command[:2] in (["exec", "-i"], ["exec", "-it"])]
+    assert executions == [[
+        "exec", "-it", "--user", "root", "--workdir", "/workspace", "selected",
+        "/bin/sh", "-lc",
+        "if command -v bash >/dev/null 2>&1; then exec bash -l; else exec /bin/sh; fi",
+    ]]
+
+
+def test_shell_help_explains_root_identity_and_desktop_user(capsys):
+    with pytest.raises(SystemExit) as exited:
+        main(["shell", "--help"])
+    assert exited.value.code == 0
+    output = capsys.readouterr().out
+    assert "as root" in output
+    assert "VNC desktop" in output and "host user" in output
+
+
+@pytest.mark.parametrize("state,managed,error", [
+    ("exited", True, "not running"),
+    ("running", False, "not managed"),
+])
+def test_cli_shell_rejects_unavailable_container_without_entering(tmp_path, capsys, state, managed, error):
+    docker = Docker()
+    backend = Backend(config=config(tmp_path), runner=docker)
+    backend.inventory = Inventory()
+    backend.fleet.create("selected", "demo:image")
+    docker.containers["selected"].update(state=state, managed=managed)
+    docker.commands.clear()
+
+    assert main(["shell", "selected"], backend=backend) == 1
+    assert error in capsys.readouterr().err
+    assert not any(command[:2] == ["exec", "-it"] for command in docker.commands)
