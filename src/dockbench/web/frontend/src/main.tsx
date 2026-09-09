@@ -172,6 +172,178 @@ function XtermSurface({ session, active }: { session: Session; active: boolean }
 function DockbenchDock({ view, setView, activities, clearActivity, serverOnline, sessions, active, select, close, maximized, toggleMaximized }: { view: DockView; setView: (view: DockView) => void; activities: ActivityEntry[]; clearActivity: () => void; serverOnline: boolean; sessions: Session[]; active: string | null; select: (id: string) => void; close: (s: Session) => void; maximized: boolean; toggleMaximized: () => void }) {
   return <section className="terminal-dock"><div className="dock-heading"><div className="dock-modes"><button className={view === "activity" ? "active" : ""} onClick={() => setView("activity")}>Activity</button><button className={view === "bash" ? "active" : ""} onClick={() => setView("bash")}>Root Bash {sessions.length > 0 && <b>{sessions.length}</b>}</button></div><span className={`server-state ${serverOnline ? "online" : "offline"}`}><i />Dockbench server {serverOnline ? "connected" : "unavailable"}</span><div className="dock-actions">{view === "activity" && activities.length > 0 && <button className="clear-activity quiet" onClick={clearActivity}>Clear</button>}<button className="dock-maximize quiet" type="button" aria-label={maximized ? "Restore lower panel" : "Maximize lower panel"} aria-pressed={maximized} title={maximized ? "Restore lower panel" : "Maximize lower panel"} onClick={toggleMaximized}><span aria-hidden="true">{maximized ? "↙" : "⛶"}</span></button></div></div><div className="activity-log" role="log" aria-label="Dockbench activity" hidden={view !== "activity"}>{activities.length ? activities.slice().reverse().map((entry) => <div className={`activity-entry ${entry.level}`} key={entry.id}><time>{entry.time}</time><span>{entry.message}</span></div>) : <p>No activity yet. Container, desktop, terminal, image, and server operations will appear here.</p>}</div><div className="terminal-pane" hidden={view !== "bash"}>{sessions.length > 0 && <div className="terminal-tabs">{sessions.map((item, index) => <button className={active === item.id ? "active" : ""} onClick={() => select(item.id)} key={item.id}>bash {index + 1} · {item.container}<i onClick={(event) => { event.stopPropagation(); close(item); }}>×</i></button>)}</div>}<div className="terminal-screen">{sessions.length ? sessions.map((item) => <XtermSurface key={item.id} session={item} active={view === "bash" && item.id === active} />) : <p>Terminal sessions appear here. They run as root inside the selected managed container.</p>}</div></div></section>;
 }
-function DesktopPage({ containerName }: { containerName: string }) { const [clipboard] = useState(() => new DesktopClipboard()), [clipboardOpen, setClipboardOpen] = useState(false); const canvas = useRef<HTMLDivElement>(null), rfb = useRef<RFB | null>(null); const [password, setPassword] = useState(""), [mode, setMode] = useState<"connect" | "reset">("connect"), [message, setMessage] = useState("Enter the VNC password to connect."), [connected, setConnected] = useState(false), [fullscreen, setFullscreen] = useState(false); useEffect(() => () => { clipboard.detach(); rfb.current?.disconnect(); }, [clipboard]); useEffect(() => { void api("/api/containers").catch(() => setMessage("Could not initialize this desktop session. Return to Dockbench and refresh.")); }, []); useEffect(() => { const sync = () => setFullscreen(Boolean(document.fullscreenElement)); document.addEventListener("fullscreenchange", sync); sync(); return () => document.removeEventListener("fullscreenchange", sync); }, []); const connect = async (event: FormEvent, pass = password) => { event.preventDefault(); try { clipboard.detach(); setConnected(false); setMessage("Preparing desktop…"); if (!csrf) await api("/api/containers"); const result = await api<{ session_id: string }>(`/api/containers/${encodeURIComponent(containerName)}/desktop/sessions`, { method: "POST", body: JSON.stringify({ password: pass }) }); const client = new RFB(canvas.current!, wsUrl(`/api/containers/${encodeURIComponent(containerName)}/desktop/sessions/${encodeURIComponent(result.session_id)}/ws`), { credentials: { password: pass } }); client.scaleViewport = true; clipboard.attach(client); client.addEventListener("connect", () => { if (rfb.current !== client) return; setPassword(""); setConnected(true); setMessage("Desktop connected"); }); client.addEventListener("securityfailure", () => { if (rfb.current !== client) return; setConnected(false); setMessage("VNC authentication failed. Check or reset the password."); }); client.addEventListener("disconnect", () => { if (rfb.current !== client) return; setConnected(false); setMessage("Desktop disconnected."); }); rfb.current?.disconnect(); rfb.current = client; } catch (problem) { setMessage(problem instanceof Error ? problem.message : "Desktop connection failed."); } }; const reset = async (event: FormEvent) => { event.preventDefault(); try { if (!csrf) await api("/api/containers"); await api(`/api/containers/${encodeURIComponent(containerName)}/desktop/password`, { method: "POST", body: JSON.stringify({ password }) }); await connect(event, password); } catch (problem) { setMessage(problem instanceof Error ? problem.message : "Could not reset the VNC password."); } }; const fullscreenToggle = async () => { try { if (document.fullscreenElement) await document.exitFullscreen(); else await document.documentElement.requestFullscreen(); } catch { setMessage("Fullscreen is unavailable in this browser."); } }; return <main className="desktop-page"><header><div><strong>Dockbench</strong><span>{containerName}</span></div><span>{message}</span><div className="desktop-actions"><button aria-expanded={clipboardOpen} aria-controls="desktop-clipboard" onClick={() => setClipboardOpen((open) => !open)}>Clipboard</button><button onClick={() => void fullscreenToggle()}>{fullscreen ? "Exit fullscreen" : "Fullscreen"}</button><button onClick={() => rfb.current?.disconnect()} disabled={!connected}>Disconnect</button></div></header><div ref={canvas} className="desktop-canvas" />{clipboardOpen && <ClipboardPanel clipboard={clipboard} />}{!connected && <form className="desktop-connect" onSubmit={mode === "reset" ? reset : connect}><h1>{mode === "reset" ? "Reset VNC password" : containerName}</h1><p>{mode === "reset" ? "Choose a new 6–8 character VNC password. It replaces the existing password." : message}</p><input type="password" value={password} onChange={(event) => setPassword(event.target.value)} placeholder="VNC password" minLength={mode === "reset" ? 6 : undefined} maxLength={mode === "reset" ? 8 : undefined} required autoFocus /><div><button type="button" className="quiet" onClick={() => { setPassword(""); setMode(mode === "connect" ? "reset" : "connect"); }}>{mode === "connect" ? "Reset password" : "Use existing password"}</button><button className="primary">{mode === "reset" ? "Reset and connect" : "Open desktop"}</button></div></form>}</main>; }
+function DesktopPage({ containerName }: { containerName: string }) {
+  const [clipboard] = useState(() => new DesktopClipboard()),
+    [clipboardOpen, setClipboardOpen] = useState(false);
+  const canvas = useRef<HTMLDivElement>(null),
+    rfb = useRef<RFB | null>(null);
+  const [password, setPassword] = useState(""),
+    [mode, setMode] = useState<"connect" | "reset">("connect"),
+    [message, setMessage] = useState("Enter the VNC password to connect."),
+    [connected, setConnected] = useState(false),
+    [fullscreen, setFullscreen] = useState(false);
+  useEffect(
+    () => () => {
+      clipboard.detach();
+      rfb.current?.disconnect();
+    },
+    [clipboard],
+  );
+  useEffect(() => {
+    void api("/api/containers").catch(() =>
+      setMessage(
+        "Could not initialize this desktop session. Return to Dockbench and refresh.",
+      ),
+    );
+  }, []);
+  useEffect(() => {
+    const sync = () => setFullscreen(Boolean(document.fullscreenElement));
+    document.addEventListener("fullscreenchange", sync);
+    sync();
+    return () => document.removeEventListener("fullscreenchange", sync);
+  }, []);
+  const connect = async (event: FormEvent, pass = password) => {
+    event.preventDefault();
+    try {
+      clipboard.detach();
+      setConnected(false);
+      setMessage("Preparing desktop…");
+      if (!csrf) await api("/api/containers");
+      const result = await api<{
+        session_id: string;
+      }>(
+        `/api/containers/${encodeURIComponent(containerName)}/desktop/sessions`,
+        { method: "POST", body: JSON.stringify({ password: pass }) },
+      );
+      const client = new RFB(
+        canvas.current!,
+        wsUrl(
+          `/api/containers/${encodeURIComponent(containerName)}/desktop/sessions/${encodeURIComponent(result.session_id)}/ws`,
+        ),
+        { credentials: { password: pass } },
+      );
+      client.scaleViewport = true;
+      clipboard.attach(client);
+      client.addEventListener("connect", () => {
+        if (rfb.current !== client) return;
+        setPassword("");
+        setConnected(true);
+        setMessage("Desktop connected");
+      });
+      client.addEventListener("securityfailure", () => {
+        if (rfb.current !== client) return;
+        setConnected(false);
+        setMessage("VNC authentication failed. Check or reset the password.");
+      });
+      client.addEventListener("disconnect", () => {
+        if (rfb.current !== client) return;
+        setConnected(false);
+        setMessage("Desktop disconnected.");
+      });
+      rfb.current?.disconnect();
+      rfb.current = client;
+    } catch (problem) {
+      setMessage(
+        problem instanceof Error
+          ? problem.message
+          : "Desktop connection failed.",
+      );
+    }
+  };
+  const reset = async (event: FormEvent) => {
+    event.preventDefault();
+    try {
+      if (!csrf) await api("/api/containers");
+      await api(
+        `/api/containers/${encodeURIComponent(containerName)}/desktop/password`,
+        { method: "POST", body: JSON.stringify({ password }) },
+      );
+      await connect(event, password);
+    } catch (problem) {
+      setMessage(
+        problem instanceof Error
+          ? problem.message
+          : "Could not reset the VNC password.",
+      );
+    }
+  };
+  const fullscreenToggle = async () => {
+    try {
+      if (document.fullscreenElement) await document.exitFullscreen();
+      else await document.documentElement.requestFullscreen();
+    } catch {
+      setMessage("Fullscreen is unavailable in this browser.");
+    }
+  };
+  return (
+    <main className="desktop-page">
+      <header>
+        <div>
+          <strong>Dockbench</strong>
+          <span>{containerName}</span>
+        </div>
+        <span>{message}</span>
+        <div className="desktop-actions">
+          <button
+            aria-expanded={clipboardOpen}
+            aria-controls="desktop-clipboard"
+            onClick={() => setClipboardOpen((open) => !open)}
+          >
+            Clipboard
+          </button>
+          <button onClick={() => void fullscreenToggle()}>
+            {fullscreen ? "Exit fullscreen" : "Fullscreen"}
+          </button>
+          <button
+            onClick={() => rfb.current?.disconnect()}
+            disabled={!connected}
+          >
+            Disconnect
+          </button>
+        </div>
+      </header>
+      <div ref={canvas} className="desktop-canvas" />
+      {clipboardOpen && <ClipboardPanel clipboard={clipboard} />}
+      {!connected && (
+        <form
+          className="desktop-connect"
+          onSubmit={mode === "reset" ? reset : connect}
+        >
+          <h1>{mode === "reset" ? "Reset VNC password" : containerName}</h1>
+          <p>
+            {mode === "reset"
+              ? "Choose a new 6–8 character VNC password. It replaces the existing password."
+              : message}
+          </p>
+          <input
+            type="password"
+            value={password}
+            onChange={(event) => setPassword(event.target.value)}
+            placeholder="VNC password"
+            minLength={mode === "reset" ? 6 : undefined}
+            maxLength={mode === "reset" ? 8 : undefined}
+            required
+            autoFocus
+          />
+          <div>
+            <button
+              type="button"
+              className="quiet"
+              onClick={() => {
+                setPassword("");
+                setMode(mode === "connect" ? "reset" : "connect");
+              }}
+            >
+              {mode === "connect" ? "Reset password" : "Use existing password"}
+            </button>
+            <button className="primary">
+              {mode === "reset" ? "Reset and connect" : "Open desktop"}
+            </button>
+          </div>
+        </form>
+      )}
+    </main>
+  );
+}
 const desktopMatch = location.pathname.match(/^\/desktop\/([^/]+)$/);
 createRoot(document.getElementById("root")!).render(desktopMatch ? <DesktopPage containerName={decodeURIComponent(desktopMatch[1])} /> : <App />);
