@@ -10,3 +10,4 @@ dist/
 .env
 .env.*
 *.tar
+/config/dockbench.yaml

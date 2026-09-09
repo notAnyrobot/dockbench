@@ -30,7 +30,7 @@ class ShellExecution:
 
 
 def generic_shell(container_name: str) -> ShellExecution:
-    """Browser and generic-image root shell contract."""
+    """Shared root shell contract for CLI and browser terminals."""
     return ShellExecution(
         (
             "exec",
@@ -93,38 +93,12 @@ chown "$requested_uid:$requested_gid" /state/.dockbench-bashrc
             input=script,
         )
 
-    def shell(self, *, host_user: bool = True) -> ShellExecution:
+    def shell(self) -> ShellExecution:
         if self._container._container_status() != "running":
             raise WorkstationError(
                 f"{self.config.container_name} is not running; use `dockbench start` first"
             )
-        c = self.config
-        if host_user and self._container.status().desktop_capable:
-            self.prepare_user()
-            return ShellExecution(
-                (
-                    "exec",
-                    "-it",
-                    "--user",
-                    f"{c.container_uid}:{c.container_gid}",
-                    "--workdir",
-                    "/workspace",
-                    "--env",
-                    "HOME=/state/home",
-                    "--env",
-                    f"USER={c.host_user}",
-                    "--env",
-                    f"LOGNAME={c.host_user}",
-                    "--env",
-                    f"DOCKBENCH_PROMPT_USER={c.host_user}",
-                    c.container_name,
-                    "/bin/bash",
-                    "--rcfile",
-                    "/state/.dockbench-bashrc",
-                )
-            )
-        else:
-            return generic_shell(c.container_name)
+        return generic_shell(self.config.container_name)
 
     def _require_desktop(self) -> None:
         if not self._container.status().desktop_capable:

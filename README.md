@@ -86,7 +86,11 @@ requires `--replace`, which retains the workspace mount and `/state` but discard
 container filesystem. Containers run as root, so files created in a workspace root
 may become root-owned on the host.
 
-`dockbench shell CONTAINER` enters a managed container created in the browser.
+`dockbench shell CONTAINER` enters a managed container as root, matching browser
+terminals. Both start in `/workspace`, using Bash when available or `/bin/sh`
+otherwise. Shell entry does not provision or select the host user. The VNC desktop
+keeps its configured host user and persistent `/state/home`; this shell policy does
+not change desktop identity or settings.
 Without a name, `shell` uses the configured default container when it is running,
 or the sole running managed container. If several are running, specify the name.
 
@@ -101,7 +105,7 @@ use `--workspace PATH`:
 ```bash
 export DOCKBENCH_WORKSPACE="$HOME/workspace"
 uv run dockbench start
-uv run dockbench deploy --workspace /data/$USER/workspace
+uv run dockbench server deploy --workspace /data/$USER/workspace
 ```
 
 The browser's **Create container** dialog uses that normalized root by default.
@@ -169,7 +173,7 @@ required host commands.
 Deploy the loopback-only Dockbench server on the Docker host:
 
 ```bash
-uv run dockbench deploy
+uv run dockbench server deploy
 ```
 
 Deployment installs locked Python and frontend dependencies, builds the browser
@@ -182,23 +186,91 @@ uv run dockbench server status
 uv run dockbench server stop
 ```
 
-For foreground development or direct local use, run:
+Normal start requires a previous deployment and returns after readiness. It resumes
+both user systemd services and managed background processes without installing
+dependencies or rebuilding the browser client. If the installed checkout's
+dependencies are missing, run `dockbench server deploy` to repair the installation.
+Stopping a managed process preserves its installation and clears live PID ownership.
+
+Edit the host YAML, then run `server stop` followed by `server start` to apply it.
+Start also accepts `--config`, `--port`, `--workspace`, `--state-root`, and
+`--docker-command`. Starting an already-running server keeps its current settings
+and reports its actual URL; stop/start applies desired settings. Status and stop
+use installed identity even when desired YAML is malformed or has changed.
+Readiness failures report the log location and stop newly launched servers, so a
+later start can retry. These operations leave managed containers and desktops alone.
+
+For foreground development or direct local use, build the frontend first, then run
+in the current terminal without deploying a service (Ctrl+C stops it):
 
 ```bash
-uv run dockbench serve
+uv run dockbench server start --foreground
 ```
 
-On a local machine, create an SSH tunnel to the remote browser server:
+Host settings can be kept in the checkout:
 
 ```bash
-uv run dockbench connect USER@HPC_HOST
-uv run dockbench connect research-hpc --local-port 9878 --remote-port 8787
-uv run dockbench connect research-hpc --open-browser
+cp config/dockbench.example.yaml config/dockbench.yaml
+# Edit config/dockbench.yaml for this host, then:
+uv run dockbench server deploy
+uv run dockbench server start --foreground --config /path/to/host.yaml --port 9878
 ```
 
-Open the printed `127.0.0.1` URL and keep the tunnel command running while
-using Dockbench. The server binds only to `127.0.0.1` on the remote host; it is
-not exposed to the network.
+`config/dockbench.yaml` is gitignored and user-managed; Dockbench never creates or
+overwrites it. The default is found from the installed checkout, even when the
+command runs in another directory. Explicit `--config` paths must exist. The
+[schema example](config/dockbench.example.yaml) has version 1 and optional
+`server.port`, `server.workspace`, `server.state_root`, `server.docker_command`,
+`web.remote_port`, `web.local_port`, and `web.open_browser` fields. Unknown fields,
+invalid types, and null values except `web.local_port` are rejected. A null local
+port means automatic tunnel-port selection; browser opening defaults to enabled
+for the canonical web command.
+
+Server settings use explicit flags, then YAML, applicable `DOCKBENCH_WORKSPACE`,
+`DOCKBENCH_STATE_ROOT`, and `DOCKBENCH_DOCKER` environment values, a compatible
+saved deployment from this checkout, and existing defaults. YAML paths are
+relative to the YAML directory; CLI paths are relative to the invoking directory.
+Both expand `~`. Workspace validation happens before deployment changes. Host
+settings do not alter image recipes or other container command defaults.
+
+The desired YAML remains separate from the effective JSON runtime snapshot under
+`$XDG_CONFIG_HOME/dockbench/server` (default `~/.config/dockbench/server`) and
+installed metadata under `$XDG_STATE_HOME/dockbench/server` (default
+`~/.local/state/dockbench/server`). Only existing allowlisted environment settings
+are saved; credentials do not belong in YAML or the runtime snapshot. New service
+launch definitions use `server start --foreground` with the effective snapshot.
+The hidden deprecated `deploy` and `serve` aliases remain available with migration
+guidance on stderr. Legacy `serve --config` still means the old JSON runtime file,
+while canonical `--config` selects host YAML.
+
+Open an existing local server, or supply an explicit SSH host for remote access:
+
+```bash
+uv run dockbench web
+uv run dockbench web --port 9878 --no-open
+uv run dockbench web USER@HPC_HOST
+uv run dockbench web research-hpc --local-port 9878 --port 8787
+uv run dockbench web research-hpc --config ~/dockbench-client.yaml
+```
+
+`web` verifies readiness, prints the loopback URL, and opens your browser by
+default. `--no-open` disables browser opening; `--open-browser` overrides the YAML
+preference. It never starts, deploys, or rebuilds a server. Without an SSH host,
+access is always local: the destination port comes from `--port`, YAML
+`server.port`, a compatible saved deployment, then 8787. With an explicit SSH
+host it comes from `--port`, YAML `web.remote_port`, then 8787. Remote access does
+not require the configured local workspace directory to exist.
+
+Remote forwarding uses `--local-port`, then YAML `web.local_port`; an omitted or
+null setting selects 8787 when free, otherwise a free local port. An explicitly
+occupied port fails with guidance. Keep the tunnel command running while using
+Dockbench and press Ctrl+C to close it. Interactive SSH authentication retains
+its normal prompts. The server and tunnel bind only to `127.0.0.1`.
+
+If browser launch fails, open the printed URL manually; the remote tunnel stays
+available until interrupted. The hidden deprecated `connect` alias retains
+`--remote-port` and its opt-in `--open-browser` default. Migrate scripts to
+`web HOST --port PORT --no-open` to retain that browser behavior.
 
 ### Rootless Docker with NVIDIA GPUs
 
@@ -238,3 +310,17 @@ Historical UX and planning inputs remain in
 The runtime and historical design inputs were imported from
 [`notAnyrobot/awesome-robotics`](https://github.com/notAnyrobot/awesome-robotics)
 commits `4765bef`, `060758f`, and `0b25b71`.
+
+### Browser desktop clipboard
+
+Open a desktop and connect with its existing VNC password, then select
+**Clipboard** in the toolbar. Paste host text into **Outgoing text** and click
+**Send to desktop**. This sets the remote clipboard only; choose Paste inside
+the remote application yourself. Sending never presses keys or executes commands.
+
+Copy text within the remote desktop to populate **Incoming remote text**, then
+click **Copy to host**. If browser clipboard access is unavailable or denied,
+select the incoming text and copy it manually. Text stays in memory and clears
+when the connection ends or changes; sending and host copying are disabled while
+disconnected. Dockbench does not continuously read or write your host clipboard.
+No image rebuild, container recreation, or desktop configuration change is needed.

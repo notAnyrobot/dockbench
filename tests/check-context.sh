@@ -33,7 +33,7 @@ grep -F 'dst=/workspace' src/dockbench/core/workstation.py >/dev/null
 grep -F 'DOCKBENCH_WORKSPACE' src/dockbench/core/workstation.py >/dev/null
 grep -F -- '--workspace' src/dockbench/cli/deploy.py >/dev/null
 test -f src/dockbench/core/resources.py
-grep -F 'dockbench serve' assets/systemd/dockbench.service >/dev/null
+grep -F 'dockbench server start --foreground' assets/systemd/dockbench.service >/dev/null
 grep -F '__UV_EXECUTABLE__' assets/systemd/dockbench.service >/dev/null
 grep -F '__SERVER_CONFIG__' assets/systemd/dockbench.service >/dev/null
 grep -F '__SERVER_PORT__' assets/systemd/dockbench.service >/dev/null

@@ -112,9 +112,11 @@ def test_terminal_has_browser_dimensions_before_interactive_child_starts(tmp_pat
     app = create_app(FakeWorkstation(), fleet=fleet, backend=Backend(environment={"DOCKBENCH_DOCKER": str(docker_probe)}))
     session_id = asyncio.run(app.state.terminal_sessions.create("alpha"))
     spawned_sizes = []
+    spawned_commands = []
     create_subprocess_exec = asyncio.create_subprocess_exec
 
     async def capture_spawn_size(*args, **kwargs):
+        spawned_commands.append(args)
         spawned_sizes.append(os.get_terminal_size(kwargs["stdin"]))
         return await create_subprocess_exec(*args, **kwargs)
 
@@ -130,6 +132,11 @@ def test_terminal_has_browser_dimensions_before_interactive_child_starts(tmp_pat
             output += socket.receive_text()
 
     assert spawned_sizes == [os.terminal_size((120, 37))]
+    assert spawned_commands == [(
+        str(docker_probe), "exec", "-it", "--user", "root", "--workdir", "/workspace",
+        "alpha", "/bin/sh", "-lc",
+        "if command -v bash >/dev/null 2>&1; then exec bash -l; else exec /bin/sh; fi",
+    )]
 
 
 def test_terminal_cancelled_launch_releases_pty(tmp_path, monkeypatch):

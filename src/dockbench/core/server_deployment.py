@@ -14,7 +14,7 @@ import subprocess
 import time
 import urllib.error
 import urllib.request
-from dataclasses import dataclass
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Mapping
 
@@ -52,6 +52,7 @@ class DeploymentOptions:
     config_home: Path | None = None
     state_home: Path | None = None
     health_timeout_seconds: float = 30.0
+    runtime_environment: Mapping[str, str] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -112,7 +113,7 @@ class ServerDeployment:
             repository_root=root, port=options.port, workspace_root=options.workspace_root,
             state_root=options.state_root, docker_command=options.docker_command,
             config_home=options.config_home, state_home=options.state_home,
-            health_timeout_seconds=options.health_timeout_seconds,
+            health_timeout_seconds=options.health_timeout_seconds, runtime_environment=options.runtime_environment,
         )
         self.config_dir = (options.config_home or _xdg_path("XDG_CONFIG_HOME", ".config")) / "dockbench" / "server"
         self.state_dir = (options.state_home or _xdg_path("XDG_STATE_HOME", ".local/state")) / "dockbench" / "server"
@@ -127,8 +128,10 @@ class ServerDeployment:
     def url(self) -> str:
         return f"http://127.0.0.1:{self.options.port}"
 
-    def _snapshot_environment(self) -> dict[str, str]:
-        environment = {key: os.environ[key] for key in _RUNTIME_ENVIRONMENT if key in os.environ}
+    def runtime_environment(self) -> dict[str, str]:
+        environment = {key: value for key, value in self.options.runtime_environment.items()
+                       if key in _RUNTIME_ENVIRONMENT and isinstance(value, str) and "\x00" not in value}
+        environment.update({key: os.environ[key] for key in _RUNTIME_ENVIRONMENT if key in os.environ})
         configured_root = environment.get("DOCKBENCH_WORKSPACE")
         try:
             if self.options.workspace_root is not None:
@@ -174,7 +177,7 @@ class ServerDeployment:
     def _write_runtime_config(self, environment: Mapping[str, str] | None = None) -> dict[str, str]:
         self._mkdir_private(self.config_dir)
         self._mkdir_private(self.state_dir)
-        values = dict(environment) if environment is not None else self._snapshot_environment()
+        values = dict(environment) if environment is not None else self.runtime_environment()
         config = {
             "schema_version": 1,
             "repository_root": str(self.options.repository_root),
@@ -229,7 +232,7 @@ class ServerDeployment:
             return "unavailable"
         raise DeploymentError(f"user systemd is available but unhealthy: {(result.stderr or result.stdout).strip()}")
 
-    def _install_systemd(self, uv: str) -> DeploymentResult:
+    def _install_systemd(self, uv: str, *, restart: bool = True) -> DeploymentResult:
         template_path = CheckoutResources.discover(self.options.repository_root).assets / "systemd" / "dockbench.service"
         try:
             template = template_path.read_text(encoding="utf-8")
@@ -243,19 +246,19 @@ class ServerDeployment:
             "__SERVER_PORT__": str(self.options.port),
         }
         for old, new in substitutions.items():
-            template = template.replace(old, new)
+            template = template.replace(old, new if old == "__SERVER_PORT__" else json.dumps(new).replace("%", "%%"))
         self._mkdir_private(self.unit_path.parent)
         self._write_private(self.unit_path, template)
         for command in (
             ["systemctl", "--user", "daemon-reload"],
             ["systemctl", "--user", "enable", "dockbench.service"],
-            ["systemctl", "--user", "restart", "dockbench.service"],
+            ["systemctl", "--user", "restart" if restart else "start", "dockbench.service"],
         ):
             self._command(command, cwd=self.options.repository_root)
         return DeploymentResult("systemd", self.url, self.config_path, self.environment_path, unit_path=self.unit_path)
 
     def _fallback_command(self, uv: str) -> list[str]:
-        return [uv, "run", "--frozen", "--project", str(self.options.repository_root), "dockbench", "serve", "--port", str(self.options.port), "--config", str(self.config_path)]
+        return [uv, "run", "--frozen", "--no-sync", "--project", str(self.options.repository_root), "dockbench", "server", "start", "--foreground", "--port", str(self.options.port), "--runtime-config", str(self.config_path)]
 
     def _install_fallback(self, uv: str, environment: Mapping[str, str]) -> DeploymentResult:
         self._stop_managed_fallback()
@@ -271,9 +274,15 @@ class ServerDeployment:
         finally:
             if "log" in locals():
                 log.close()
+        self._owned_process = process
         metadata = self._installation_metadata("process", process.pid, command)
-        self._write_private(self.metadata_path, json.dumps(metadata, sort_keys=True) + "\n")
-        self._write_private(self.pid_path, f"{process.pid}\n")
+        try:
+            self._write_private(self.metadata_path, json.dumps(metadata, sort_keys=True) + "\n")
+            self._write_private(self.pid_path, f"{process.pid}\n")
+        except BaseException:
+            self._stop_process(process.pid, expected=metadata.get("process_identity"))
+            process.wait()
+            raise
         return DeploymentResult("process", self.url, self.config_path, self.environment_path, log_path=self.log_path, pid=process.pid)
 
     def _wait_for_health(self, result: DeploymentResult) -> None:
@@ -293,7 +302,7 @@ class ServerDeployment:
         raise DeploymentError(f"Dockbench did not become healthy at {self.url}: {last_error}. {diagnostics}")
 
     def deploy(self) -> DeploymentResult:
-        environment = self._snapshot_environment()
+        environment = self.runtime_environment()
         uv, npm = self._require_build_tools()
         self._build(uv, npm)
         self._write_runtime_config(environment)
@@ -371,10 +380,13 @@ class ServerDeployment:
         except PermissionError as exc:
             raise DeploymentError(f"cannot stop managed Dockbench process {pid}: {exc}") from exc
         deadline = time.monotonic() + 5
-        while self._pid_alive(pid) and time.monotonic() < deadline:
+        while self._pid_alive(pid) and (expected is None or self._pid_matches(pid, expected)) and time.monotonic() < deadline:
             time.sleep(0.1)
-        if self._pid_alive(pid):
-            os.killpg(pid, signal.SIGKILL)
+        if self._pid_alive(pid) and (expected is None or self._pid_matches(pid, expected)):
+            try:
+                os.killpg(pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
 
     def _stop_managed_fallback(self) -> None:
         metadata = self._read_metadata()
@@ -382,13 +394,19 @@ class ServerDeployment:
             return
         pid, identity = metadata.get("pid"), metadata.get("process_identity")
         if isinstance(pid, int):
-            if not isinstance(identity, int):
+            child = getattr(self, "_owned_process", None)
+            owned = child is not None and child.pid == pid
+            if not isinstance(identity, int) and not owned:
                 raise DeploymentError(
                     f"cannot safely stop managed Dockbench PID {pid}: its process identity is missing; "
                     "stop it manually before redeploying"
                 )
-            self._stop_process(pid, expected=identity)
-        self.metadata_path.unlink(missing_ok=True)
+            self._stop_process(pid, expected=identity if isinstance(identity, int) else None)
+            if owned:
+                child.wait()
+        metadata.pop("pid", None)
+        metadata.pop("process_identity", None)
+        self._write_private(self.metadata_path, json.dumps(metadata, sort_keys=True) + "\n")
         self.pid_path.unlink(missing_ok=True)
 
     @staticmethod
@@ -415,21 +433,35 @@ class ServerDeployment:
         return ServerStatus("systemd", "running" if state == "active" else "stopped", state or (result.stderr or "unknown").strip(), url)
 
     def start(self) -> ServerStatus:
-        """Start an already deployed user systemd service without rebuilding."""
-        if self._systemd_probe() == "unavailable":
-            raise DeploymentError(
-                "user systemd is unavailable; run `dockbench deploy` "
-                "to start the managed fallback process"
-            )
-        if not self.unit_path.is_file():
-            raise DeploymentError(
-                "Dockbench is not deployed; run `dockbench deploy` first"
-            )
-        self._command(
-            ["systemctl", "--user", "start", "dockbench.service"],
-            cwd=self.options.repository_root,
-        )
-        return self.status()
+        """Resume an installed server using these resolved desired options."""
+        metadata = self._read_metadata()
+        manager = metadata.get("manager") if metadata else None
+        if manager not in {"process", "systemd"}:
+            if not self.unit_path.is_file():
+                raise DeploymentError("Dockbench is not deployed; run `dockbench server deploy` first")
+            manager = "systemd"
+        current = self.status()
+        if current.state == "running":
+            return replace(current, message=current.message + "; already running; stop/start applies desired settings")
+        environment = self.runtime_environment()
+        uv = shutil.which("uv")
+        if uv is None:
+            raise DeploymentError("required command not found: uv")
+        self._write_runtime_config(environment)
+        try:
+            if manager == "process":
+                result = self._install_fallback(uv, environment)
+            else:
+                result = self._install_systemd(uv, restart=False)
+                self._write_private(self.metadata_path, json.dumps(self._installation_metadata("systemd")) + "\n")
+            self._wait_for_health(result)
+            current = self.status()
+            if current.state != "running":
+                raise DeploymentError(f"Dockbench exited before readiness at {self.url}; see {self.log_path} or journalctl --user -u dockbench.service")
+        except (OSError, DeploymentError, KeyboardInterrupt):
+            self.stop()
+            raise
+        return current
 
     def stop(self) -> ServerStatus:
         metadata = self._read_metadata()
@@ -440,4 +472,4 @@ class ServerDeployment:
         if self._systemd_probe() == "unavailable":
             return ServerStatus(None, "absent", "no Dockbench service is running", self.url)
         self._command(["systemctl", "--user", "stop", "dockbench.service"], cwd=self.options.repository_root)
-        return ServerStatus("systemd", "stopped", "user service stopped", self.url)
+        return ServerStatus("systemd", "stopped", "user service stopped", self._saved_url(metadata or {}, self.url))

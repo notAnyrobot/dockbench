@@ -1,5 +1,6 @@
 """CLI serve command ownership."""
 import argparse
+import sys
 from pathlib import Path
 
 from dockbench.cli.common import fail as _fail, port as _port
@@ -19,10 +20,11 @@ def _serve(port: int = DEFAULT_SERVER_PORT, config: str | Path | None = None) ->
         return _fail(str(exc))
 
 def run(args: argparse.Namespace) -> int:
+    print("`dockbench serve` is deprecated; use `dockbench server start --foreground` (host YAML uses --config).", file=sys.stderr)
     return _serve(args.port, args.config)
 
 def register(actions) -> None:
-    serve = actions.add_parser("serve", help="Serve Dockbench on loopback.")
+    serve = actions.add_parser("serve")
     serve.add_argument("--port", type=_port, default=DEFAULT_SERVER_PORT)
     serve.add_argument("--config", help="Deployment runtime configuration file.")
     serve.set_defaults(handler=run)

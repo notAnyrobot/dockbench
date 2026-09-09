@@ -70,6 +70,7 @@ source = { editable = "." }
 dependencies = [
     { name = "anyio" },
     { name = "fastapi" },
+    { name = "pyyaml" },
     { name = "uvicorn", extra = ["standard"] },
 ]
 
@@ -84,6 +85,7 @@ dev = [
 requires-dist = [
     { name = "anyio", specifier = ">=4,<5" },
     { name = "fastapi", specifier = ">=0.115,<1" },
+    { name = "pyyaml", specifier = ">=6,<7" },
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.30,<1" },
 ]
 

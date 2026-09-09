@@ -43,7 +43,7 @@ grep -F -- "src=$state_root,dst=/state" "$temporary_dir/docker.log" >/dev/null
 
 : >"$temporary_dir/docker.log"
 DOCKBENCH_IMAGE=dockbench:test-desktop DOCKBENCH_CONTAINER=test-container run_ws shell
-grep -F '<|exec|-it|--user|1234:5678|--workdir|/workspace|' "$temporary_dir/docker.log" >/dev/null
+grep -F '<|exec|-it|--user|root|--workdir|/workspace|' "$temporary_dir/docker.log" >/dev/null
 
 DOCKBENCH_IMAGE=dockbench:test-desktop DOCKBENCH_CONTAINER=test-container \
   DOCKBENCH_VNC_PASSWORD=test-password DOCKBENCH_VNC_VIEWER="$fake_vncviewer" run_ws desktop
