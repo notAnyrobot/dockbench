@@ -67,4 +67,4 @@ def register(actions) -> None:
             deploy.add_configuration_arguments(action_parser)
             action_parser.add_argument("--runtime-config", help=argparse.SUPPRESS)
     server.set_defaults(handler=run)
-    deploy.register(server_actions, hidden=False)
+    deploy.register(server_actions)

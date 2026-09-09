@@ -138,25 +138,6 @@ def test_process_fallback_launches_canonical_foreground_command(tmp_path, monkey
     assert options['start_new_session'] is True
 
 
-def test_legacy_serve_remains_json_compatible_but_aliases_are_hidden(tmp_path, monkeypatch, capsys):
-    from dockbench.cli import serve
-    from dockbench.web import server as web_server
-
-    resources = checkout(tmp_path, monkeypatch)
-    monkeypatch.setattr(serve, 'RESOURCES', resources)
-    (resources.frontend_dist / 'assets').mkdir(parents=True)
-    (resources.frontend_dist / 'index.html').write_text('built')
-    snapshot = tmp_path / 'legacy.json'
-    snapshot.write_text(json.dumps({'environment': {'DOCKBENCH_DOCKER': 'legacy-docker'}}))
-    apps = []
-    monkeypatch.setattr(web_server.uvicorn, 'run', lambda app, **options: apps.append(options))
-    assert main([]) == 0
-    help_text = capsys.readouterr().out
-    assert not any(line.strip().startswith(('deploy ', 'serve ')) for line in help_text.splitlines())
-    assert main(['serve', '--config', str(snapshot), '--port', '9456']) == 0
-    assert apps[0]['port'] == 9456
-    assert 'deprecated' in capsys.readouterr().err
-
 
 def test_foreground_ctrl_c_finishes_without_traceback_or_service_metadata(tmp_path, monkeypatch):
     from dockbench.web import server as web_server

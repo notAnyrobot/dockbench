@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from dockbench.cli import main, server, deploy, connect, serve
+from dockbench.cli import main, server, deploy, web
 from dockbench.web import server as web_server
 
 
@@ -16,6 +16,7 @@ def test_bare_command_prints_help_successfully(capsys):
 
 
 @pytest.mark.parametrize("legacy", [
+    ["deploy", "--help"], ["serve", "--help"], ["connect", "--help"],
     ["help"], ["container", "start"], ["workbench", "deploy"], ["service", "install"],
     ["gpus"], ["images"], ["image", "list"], ["image", "recipe", "list"],
 ])
@@ -25,7 +26,7 @@ def test_legacy_commands_are_unavailable(legacy):
     assert exited.value.code == 2
 
 
-def test_deploy_server_and_connect_preserve_options_and_output(monkeypatch, capsys):
+def test_server_and_web_preserve_options_and_output(monkeypatch, capsys):
     deployments = []
     class Deployment:
         def __init__(self, options):
@@ -46,10 +47,10 @@ def test_deploy_server_and_connect_preserve_options_and_output(monkeypatch, caps
         return SimpleNamespace(interrupted=True)
 
     monkeypatch.setattr(deploy, "ServerDeployment", Deployment)
-    monkeypatch.setattr(connect, "connect", tunnel)
-    assert main.main(["deploy", "--port", "9001", "--workspace", "/data/atom7/workspace",
+    monkeypatch.setattr(web, "connect", tunnel)
+    assert main.main(["server", "deploy", "--port", "9001", "--workspace", "/data/atom7/workspace",
                       "--state-root", "/state", "--docker-command", "podman"]) == 0
-    assert main.main(["connect", "hpc", "--local-port", "9002", "--remote-port", "9001"]) == 0
+    assert main.main(["web", "hpc", "--local-port", "9002", "--port", "9001", "--no-open"]) == 0
     for action in ("start", "status", "stop"):
         assert main.main(["server", action]) == 0
     assert deployments[0].port == 9001
@@ -168,40 +169,43 @@ def test_image_build_streams_plain_progress_to_cli(monkeypatch, capsys):
 
 def test_server_ports_are_validated_by_parser():
     with pytest.raises(SystemExit):
-        main.parser().parse_args(["connect", "hpc", "--remote-port", "70000"])
+        main.parser().parse_args(["web", "hpc", "--port", "70000"])
 
 
 def test_workspace_parser_preserves_path():
-    selected = main.parser().parse_args(["deploy", "--workspace", "/data/atom7/workspace"])
+    selected = main.parser().parse_args(["server", "deploy", "--workspace", "/data/atom7/workspace"])
     assert selected.workspace == "/data/atom7/workspace"
 
 
-def test_serve_reports_explicit_checkout_build_location(tmp_path, monkeypatch, capsys):
+def test_foreground_reports_explicit_checkout_build_location(tmp_path, monkeypatch, capsys):
     from dockbench.core.resources import CheckoutResources
 
     root = tmp_path / "checkout"
-    monkeypatch.setattr(serve, "RESOURCES", CheckoutResources.discover(root))
+    root.mkdir()
+    monkeypatch.setattr(deploy, "RESOURCES", CheckoutResources.discover(root))
     monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("DOCKBENCH_WORKSPACE", str(tmp_path))
 
-    assert main.main(["serve"]) == 1
+    assert main.main(["server", "start", "--foreground"]) == 1
     error = capsys.readouterr().err
     assert "frontend is not built" in error
     assert str(root / "src/dockbench/web/frontend") in error
 
 
-def test_serve_starts_built_checkout_from_other_directory(tmp_path, monkeypatch):
+def test_foreground_starts_built_checkout_from_other_directory(tmp_path, monkeypatch):
     from dockbench.core.resources import CheckoutResources
 
     root = tmp_path / "checkout"
     dist = root / "src/dockbench/web/frontend/dist"
     (dist / "assets").mkdir(parents=True)
     (dist / "index.html").write_text("frontend")
-    monkeypatch.setattr(serve, "RESOURCES", CheckoutResources.discover(root))
+    monkeypatch.setattr(deploy, "RESOURCES", CheckoutResources.discover(root))
     monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("DOCKBENCH_WORKSPACE", str(tmp_path))
     calls = []
     monkeypatch.setattr(web_server.uvicorn, "run", lambda *args, **kwargs: calls.append((args, kwargs)))
 
-    assert main.main(["serve", "--port", "9003"]) == 0
+    assert main.main(["server", "start", "--foreground", "--port", "9003"]) == 0
     from fastapi.testclient import TestClient
     assert len(calls) == 1
     assert TestClient(calls[0][0][0]).get('/api/health').json() == {'status': 'ok'}
@@ -247,12 +251,12 @@ def test_runtime_config_is_loaded_before_app_settings(tmp_path, monkeypatch):
                                                  'DOCKBENCH_DOCKER': str(CheckoutResources.discover().repository_root / 'tests/helpers/fake-docker')}}))
     monkeypatch.setenv('DOCKBENCH_WORKSPACE', '/missing/workspace')
     monkeypatch.setenv('DOCKBENCH_DOCKER', '/missing/docker')
-    monkeypatch.setattr(serve, 'RESOURCES', CheckoutResources.discover(root))
+    monkeypatch.setattr(deploy, 'RESOURCES', CheckoutResources.discover(root))
     monkeypatch.setenv('FAKE_DOCKER_LOG', str(tmp_path / 'docker.log'))
     monkeypatch.setenv('FAKE_DOCKER_STATE', str(tmp_path / 'docker.state'))
     apps = []
     monkeypatch.setattr(web_server.uvicorn, 'run', lambda app, **kwargs: apps.append(app))
-    assert main.main(['serve', '--config', str(config)]) == 0
+    assert main.main(['server', 'start', '--foreground', '--runtime-config', str(config)]) == 0
     assert TestClient(apps[0]).get('/api/health').json() == {'status': 'ok'}
     # Recipe discovery is independent of lifecycle validation and Docker.
     assert TestClient(apps[0]).get('/api/image-recipes').status_code == 200

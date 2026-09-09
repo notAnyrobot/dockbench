@@ -20,7 +20,7 @@ def _deployment(tmp_path: Path) -> ServerDeployment:
     workspace_root.mkdir()
     (root / "assets/systemd").mkdir(parents=True)
     (root / "assets/systemd/dockbench.service").write_text(
-        "ExecStart=__UV_EXECUTABLE__ run --project __SERVER_ROOT__ dockbench serve --port __SERVER_PORT__ --config __SERVER_CONFIG__\nEnvironmentFile=__SERVER_ENV_FILE__\n"
+        "ExecStart=__UV_EXECUTABLE__ run --project __SERVER_ROOT__ dockbench server start --foreground --port __SERVER_PORT__ --runtime-config __SERVER_CONFIG__\nEnvironmentFile=__SERVER_ENV_FILE__\n"
     )
     return ServerDeployment(DeploymentOptions(
         root,
@@ -119,7 +119,7 @@ def test_deploy_builds_before_install_and_systemd_unit_uses_serve(tmp_path, monk
         (["/bin/npm", "run", "build"], deployment.options.repository_root / "src/dockbench/web/frontend"),
     ]
     unit = result.unit_path.read_text()
-    assert "dockbench serve --port 8787 --config" in unit
+    assert "dockbench server start --foreground --port 8787 --runtime-config" in unit
     assert "__SERVER_" not in unit
     assert result.manager == "systemd"
 
