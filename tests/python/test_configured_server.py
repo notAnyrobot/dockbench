@@ -110,9 +110,9 @@ def test_generated_unit_safely_launches_foreground_using_effective_snapshot(tmp_
     unit = unit_path.read_text()
     command = next(line.removeprefix('ExecStart=:') for line in unit.splitlines() if line.startswith('ExecStart='))
     tokens = shlex.split(command.replace('%%', '%'))
-    assert tokens[:6] == ['/tools/uv', 'run', '--frozen', '--project', str(resources.repository_root), 'dockbench']
-    assert tokens[6:12] == ['server', 'start', '--foreground', '--port', '9123', '--runtime-config']
-    assert tokens[12].endswith('/xdg/dockbench/server/server.json')
+    assert tokens[:7] == ['/tools/uv', 'run', '--frozen', '--no-sync', '--project', str(resources.repository_root), 'dockbench']
+    assert tokens[7:13] == ['server', 'start', '--foreground', '--port', '9123', '--runtime-config']
+    assert tokens[13].endswith('/xdg/dockbench/server/server.json')
     assert 'ExecStart=:' in unit
 
 
@@ -131,7 +131,7 @@ def test_process_fallback_launches_canonical_foreground_command(tmp_path, monkey
     monkeypatch.setattr(urllib.request, 'urlopen', lambda *args, **kwargs: Healthy())
     assert main(['server', 'deploy']) == 0
     command, options = launches[0]
-    assert command[6:12] == ['server', 'start', '--foreground', '--port', '9123', '--runtime-config']
+    assert command[7:13] == ['server', 'start', '--foreground', '--port', '9123', '--runtime-config']
     assert options['env']['DOCKBENCH_WORKSPACE'] == str(resources.repository_root / 'workspace')
     assert options['start_new_session'] is True
 

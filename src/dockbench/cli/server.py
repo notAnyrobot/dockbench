@@ -11,10 +11,17 @@ from dockbench.cli import deploy
 from dockbench.core.host_config import ServerSettings, resolve_server_options
 from dockbench.web.server import serve
 
-def _server_status(action: str) -> int:
+def _server_status(action: str, args: argparse.Namespace | None = None) -> int:
     try:
-        status = getattr(_deployment(), action)()
-        print(f"Dockbench: {status.state} ({status.manager or 'unmanaged'}) — {status.message}")
+        deployment = _deployment()
+        if action == "start" and args is not None:
+            options = resolve_server_options(args.config, resources=deploy.RESOURCES, overrides=ServerSettings(
+                port=args.port, workspace=Path(args.workspace) if args.workspace is not None else None,
+                state_root=Path(args.state_root) if args.state_root is not None else None,
+                docker_command=args.docker_command))
+            deployment = deploy.ServerDeployment(options)
+        status = getattr(deployment, action)()
+        print(f"Dockbench: {status.state} ({status.manager or 'unmanaged'}) — {status.message}; {status.url}")
         if status.log_path:
             print(f"Log: {status.log_path}")
         elif status.manager == "systemd":
@@ -44,7 +51,7 @@ def run(args: argparse.Namespace) -> int:
             return _fail(str(exc))
     if args.server_action == "start" and args.runtime_config is not None:
         return _fail("--runtime-config requires --foreground")
-    return _server_status(args.server_action)
+    return _server_status(args.server_action, args)
 
 def register(actions) -> None:
     server = actions.add_parser("server", help="Build, deploy, and manage the Dockbench server.")

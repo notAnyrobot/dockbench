@@ -105,7 +105,7 @@ use `--workspace PATH`:
 ```bash
 export DOCKBENCH_WORKSPACE="$HOME/workspace"
 uv run dockbench start
-uv run dockbench server start --foregroundr deploy --workspace /data/$USER/workspace
+uv run dockbench server deploy --workspace /data/$USER/workspace
 ```
 
 The browser's **Create container** dialog uses that normalized root by default.
@@ -173,7 +173,7 @@ required host commands.
 Deploy the loopback-only Dockbench server on the Docker host:
 
 ```bash
-uv run dockbench server start --foregroundr deploy
+uv run dockbench server deploy
 ```
 
 Deployment installs locked Python and frontend dependencies, builds the browser
@@ -181,10 +181,24 @@ client, starts the server, and waits for its health check. It does not build an
 image or recreate a container. Manage an already deployed server with:
 
 ```bash
-uv run dockbench server start --foregroundr start
-uv run dockbench server start --foregroundr status
-uv run dockbench server start --foregroundr stop
+uv run dockbench server start
+uv run dockbench server status
+uv run dockbench server stop
 ```
+
+Normal start requires a previous deployment and returns after readiness. It resumes
+both user systemd services and managed background processes without installing
+dependencies or rebuilding the browser client. If the installed checkout's
+dependencies are missing, run `dockbench server deploy` to repair the installation.
+Stopping a managed process preserves its installation and clears live PID ownership.
+
+Edit the host YAML, then run `server stop` followed by `server start` to apply it.
+Start also accepts `--config`, `--port`, `--workspace`, `--state-root`, and
+`--docker-command`. Starting an already-running server keeps its current settings
+and reports its actual URL; stop/start applies desired settings. Status and stop
+use installed identity even when desired YAML is malformed or has changed.
+Readiness failures report the log location and stop newly launched servers, so a
+later start can retry. These operations leave managed containers and desktops alone.
 
 For foreground development or direct local use, build the frontend first, then run
 in the current terminal without deploying a service (Ctrl+C stops it):

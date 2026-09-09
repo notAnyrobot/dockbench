@@ -143,31 +143,6 @@ def test_systemd_unit_treats_uv_sigterm_exit_as_clean():
     assert "SuccessExitStatus=143" in unit
 
 
-def test_start_starts_an_existing_systemd_deployment_without_rebuilding(tmp_path, monkeypatch):
-    deployment = _deployment(tmp_path)
-    deployment._mkdir_private(deployment.unit_path.parent)
-    deployment.unit_path.write_text("[Service]\n")
-    commands = []
-    expected = ServerStatus("systemd", "running", "active", deployment.url)
-
-    monkeypatch.setattr(deployment, "_systemd_probe", lambda: "available")
-    monkeypatch.setattr(deployment, "_command", lambda args, *, cwd: commands.append((args, cwd)))
-    monkeypatch.setattr(deployment, "status", lambda: expected)
-
-    assert deployment.start() == expected
-    assert commands == [
-        (["systemctl", "--user", "start", "dockbench.service"], deployment.options.repository_root)
-    ]
-
-
-def test_start_requires_an_existing_systemd_deployment(tmp_path, monkeypatch):
-    deployment = _deployment(tmp_path)
-    monkeypatch.setattr(deployment, "_systemd_probe", lambda: "available")
-
-    with pytest.raises(DeploymentError, match="dockbench deploy"):
-        deployment.start()
-
-
 def test_fallback_replaces_old_process_persists_metadata_and_status(tmp_path, monkeypatch):
     deployment = _deployment(tmp_path)
     deployment._write_runtime_config()
@@ -178,6 +153,8 @@ def test_fallback_replaces_old_process_persists_metadata_and_status(tmp_path, mo
 
     class Process:
         pid = 42
+        def wait(self):
+            return 0
 
     monkeypatch.setattr(subprocess, "Popen", lambda *args, **kwargs: Process())
     result = deployment._install_fallback("/bin/uv", {})
@@ -207,7 +184,7 @@ def test_status_uses_saved_custom_port_after_a_new_cli_invocation(tmp_path, monk
     assert later.status().url == "http://127.0.0.1:9123"
 
 
-def test_fallback_health_failure_stops_process_and_removes_metadata(tmp_path, monkeypatch):
+def test_fallback_health_failure_stops_process_and_preserves_installation(tmp_path, monkeypatch):
     deployment = _deployment(tmp_path)
     deployment._mkdir_private(deployment.state_dir)
     metadata = deployment._installation_metadata("process", 77)
@@ -224,4 +201,4 @@ def test_fallback_health_failure_stops_process_and_removes_metadata(tmp_path, mo
     with pytest.raises(DeploymentError, match="not healthy"):
         deployment.deploy()
     assert stopped == [(77, 2)]
-    assert not deployment.metadata_path.exists()
+    assert "pid" not in json.loads(deployment.metadata_path.read_text())

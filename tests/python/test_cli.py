@@ -34,10 +34,10 @@ def test_deploy_server_and_connect_preserve_options_and_output(monkeypatch, caps
         def deploy(self):
             return SimpleNamespace(manager="process", url="http://127.0.0.1:9001", log_path="/logs/server")
         def start(self):
-            return SimpleNamespace(state="running", manager="process", message="ready", log_path=None)
+            return SimpleNamespace(state="running", manager="process", message="ready", log_path=None, url="http://127.0.0.1:9001")
         status = start
         def stop(self):
-            return SimpleNamespace(state="stopped", manager="process", message="stopped", log_path=None)
+            return SimpleNamespace(state="stopped", manager="process", message="stopped", log_path=None, url="http://127.0.0.1:9001")
 
     tunnels = []
     def tunnel(host, **options):
