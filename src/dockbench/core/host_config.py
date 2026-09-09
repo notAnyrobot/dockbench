@@ -127,6 +127,9 @@ def resolve_server_options(config: str | Path | None = None, *,
             if value is not None:
                 return value
         if environment:
+            if key == 'workspace':
+                # An empty legacy workspace value means discovery, never cwd.
+                return os.environ.get(environment) or saved.get(environment) or None
             return os.environ.get(environment, saved.get(environment))
         return saved_port if saved_port is not None else DEFAULT_SERVER_PORT
 

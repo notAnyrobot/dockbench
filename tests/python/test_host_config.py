@@ -121,3 +121,39 @@ def test_other_checkout_snapshot_is_not_used_and_optional_web_port_retains_prese
     path = tmp_path / 'config.yaml'
     path.write_text('schema_version: 1\nweb: {local_port: null}')
     assert load_host_config(path).web.local_port_supplied is True
+
+
+@pytest.mark.parametrize('live_workspace,saved_workspace', [('', None), ('', ''), (None, ''), ('', 'saved-workspace')])
+def test_empty_legacy_workspace_uses_saved_or_default_from_foreign_directory(tmp_path, monkeypatch, live_workspace, saved_workspace):
+    import json
+    from dockbench.core.host_config import resolve_server_options
+    from dockbench.core.server_deployment import ServerDeployment
+
+    checkout = tmp_path / 'checkout'
+    checkout.mkdir()
+    caller = tmp_path / 'foreign-caller'
+    caller.mkdir()
+    home = tmp_path / 'dockbench-test-home'
+    default_workspace = home / 'workspace'
+    default_workspace.mkdir(parents=True)
+    monkeypatch.setenv('HOME', str(home))
+    monkeypatch.chdir(caller)
+    if live_workspace is None:
+        monkeypatch.delenv('DOCKBENCH_WORKSPACE', raising=False)
+    else:
+        monkeypatch.setenv('DOCKBENCH_WORKSPACE', live_workspace)
+    config_home = tmp_path / 'xdg'
+    expected_workspace = default_workspace
+    if saved_workspace is not None:
+        saved_value = ''
+        if saved_workspace:
+            expected_workspace = tmp_path / saved_workspace
+            expected_workspace.mkdir()
+            saved_value = str(expected_workspace)
+        snapshot = config_home / 'dockbench/server/server.json'
+        snapshot.parent.mkdir(parents=True)
+        snapshot.write_text(json.dumps({'repository_root': str(checkout), 'port': 8787,
+                                       'environment': {'DOCKBENCH_WORKSPACE': saved_value}}))
+    options = resolve_server_options(resources=CheckoutResources.discover(checkout), config_home=config_home)
+    environment = ServerDeployment(options).runtime_environment()
+    assert environment['DOCKBENCH_WORKSPACE'] == str(expected_workspace)
