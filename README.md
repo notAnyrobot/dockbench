@@ -105,7 +105,7 @@ use `--workspace PATH`:
 ```bash
 export DOCKBENCH_WORKSPACE="$HOME/workspace"
 uv run dockbench start
-uv run dockbench deploy --workspace /data/$USER/workspace
+uv run dockbench server start --foregroundr deploy --workspace /data/$USER/workspace
 ```
 
 The browser's **Create container** dialog uses that normalized root by default.
@@ -173,7 +173,7 @@ required host commands.
 Deploy the loopback-only Dockbench server on the Docker host:
 
 ```bash
-uv run dockbench deploy
+uv run dockbench server start --foregroundr deploy
 ```
 
 Deployment installs locked Python and frontend dependencies, builds the browser
@@ -181,16 +181,53 @@ client, starts the server, and waits for its health check. It does not build an
 image or recreate a container. Manage an already deployed server with:
 
 ```bash
-uv run dockbench server start
-uv run dockbench server status
-uv run dockbench server stop
+uv run dockbench server start --foregroundr start
+uv run dockbench server start --foregroundr status
+uv run dockbench server start --foregroundr stop
 ```
 
-For foreground development or direct local use, run:
+For foreground development or direct local use, build the frontend first, then run
+in the current terminal without deploying a service (Ctrl+C stops it):
 
 ```bash
-uv run dockbench serve
+uv run dockbench server start --foreground
 ```
+
+Host settings can be kept in the checkout:
+
+```bash
+cp config/dockbench.example.yaml config/dockbench.yaml
+# Edit config/dockbench.yaml for this host, then:
+uv run dockbench server deploy
+uv run dockbench server start --foreground --config /path/to/host.yaml --port 9878
+```
+
+`config/dockbench.yaml` is gitignored and user-managed; Dockbench never creates or
+overwrites it. The default is found from the installed checkout, even when the
+command runs in another directory. Explicit `--config` paths must exist. The
+[schema example](config/dockbench.example.yaml) has version 1 and optional
+`server.port`, `server.workspace`, `server.state_root`, `server.docker_command`,
+`web.remote_port`, `web.local_port`, and `web.open_browser` fields. Unknown fields,
+invalid types, and null values except `web.local_port` are rejected. A null local
+port means automatic tunnel-port selection; browser opening defaults to enabled
+for the canonical web command.
+
+Server settings use explicit flags, then YAML, applicable `DOCKBENCH_WORKSPACE`,
+`DOCKBENCH_STATE_ROOT`, and `DOCKBENCH_DOCKER` environment values, a compatible
+saved deployment from this checkout, and existing defaults. YAML paths are
+relative to the YAML directory; CLI paths are relative to the invoking directory.
+Both expand `~`. Workspace validation happens before deployment changes. Host
+settings do not alter image recipes or other container command defaults.
+
+The desired YAML remains separate from the effective JSON runtime snapshot under
+`$XDG_CONFIG_HOME/dockbench/server` (default `~/.config/dockbench/server`) and
+installed metadata under `$XDG_STATE_HOME/dockbench/server` (default
+`~/.local/state/dockbench/server`). Only existing allowlisted environment settings
+are saved; credentials do not belong in YAML or the runtime snapshot. New service
+launch definitions use `server start --foreground` with the effective snapshot.
+The hidden deprecated `deploy` and `serve` aliases remain available with migration
+guidance on stderr. Legacy `serve --config` still means the old JSON runtime file,
+while canonical `--config` selects host YAML.
 
 On a local machine, create an SSH tunnel to the remote browser server:
 

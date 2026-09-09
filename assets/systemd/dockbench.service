@@ -6,7 +6,7 @@ After=default.target
 Type=simple
 WorkingDirectory=__SERVER_ROOT__
 EnvironmentFile=__SERVER_ENV_FILE__
-ExecStart=__UV_EXECUTABLE__ run --frozen --project __SERVER_ROOT__ dockbench serve --port __SERVER_PORT__ --config __SERVER_CONFIG__
+ExecStart=:__UV_EXECUTABLE__ run --frozen --project __SERVER_ROOT__ dockbench server start --foreground --port __SERVER_PORT__ --runtime-config __SERVER_CONFIG__
 # uv forwards systemd's SIGTERM to the server and then exits with 128 + SIGTERM.
 # The server has already completed its graceful shutdown, so 143 is successful.
 SuccessExitStatus=143

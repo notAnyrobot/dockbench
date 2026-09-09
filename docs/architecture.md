@@ -25,14 +25,16 @@ A wheel without the accompanying checkout assets is not a deployment target.
   identity and password provisioning for VNC. CLI and browser terminals share root
   shell preparation, `/workspace`, and the Bash-or-shell fallback; desktop access
   retains the configured host user and persistent home.
-- `core/server_deployment.py` and `server_connection.py` own checkout deployment,
+- `core/host_config.py` owns safe typed desired YAML, configuration precedence, and
+  compatible saved-setting discovery. `core/server_deployment.py` and
+  `server_connection.py` own checkout deployment,
   readiness, saved configuration, process/systemd lifecycle, and SSH connections.
 - `cli` adapts argparse requests into operations and owns output, exit status,
   interactive command execution, and the native desktop viewer.
 - `web/app.py` composes the HTTP application. Route modules adapt requests;
   `image_jobs.py` owns serialized jobs and temporary-upload cleanup; `sessions.py`
   owns expiring single-use tokens; `access.py` and `terminal.py` own socket and
-  PTY transport lifetime. `web/server.py` starts the server for both CLI `serve`
+  PTY transport lifetime. `web/server.py` starts the server for canonical foreground startup, legacy CLI `serve`
   and `python -m dockbench.web`.
 
 Shared modules import neither adapter, and web does not import CLI. Backend
@@ -65,7 +67,7 @@ operations, CLI output, HTTP/WebSocket behavior, deployment, SSH cleanup, and
 forbidden import directions. Tests use temporary state and controlled external
 commands; they do not need a live Docker daemon or modify managed containers.
 
-After building, run `/path/to/dockbench/.venv/bin/dockbench serve --port 9878`
+After building, run `/path/to/dockbench/.venv/bin/dockbench server start --foreground --port 9878`
 from another directory to exercise editable installation and resource discovery.
 `GET /api/health` should return `{"status":"ok"}` even when Docker is unavailable,
 and `/` should serve the built browser client. Choose an unused port and stop only

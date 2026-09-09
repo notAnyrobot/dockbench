@@ -14,7 +14,7 @@ import subprocess
 import time
 import urllib.error
 import urllib.request
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Mapping
 
@@ -52,6 +52,7 @@ class DeploymentOptions:
     config_home: Path | None = None
     state_home: Path | None = None
     health_timeout_seconds: float = 30.0
+    runtime_environment: Mapping[str, str] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -112,7 +113,7 @@ class ServerDeployment:
             repository_root=root, port=options.port, workspace_root=options.workspace_root,
             state_root=options.state_root, docker_command=options.docker_command,
             config_home=options.config_home, state_home=options.state_home,
-            health_timeout_seconds=options.health_timeout_seconds,
+            health_timeout_seconds=options.health_timeout_seconds, runtime_environment=options.runtime_environment,
         )
         self.config_dir = (options.config_home or _xdg_path("XDG_CONFIG_HOME", ".config")) / "dockbench" / "server"
         self.state_dir = (options.state_home or _xdg_path("XDG_STATE_HOME", ".local/state")) / "dockbench" / "server"
@@ -127,8 +128,10 @@ class ServerDeployment:
     def url(self) -> str:
         return f"http://127.0.0.1:{self.options.port}"
 
-    def _snapshot_environment(self) -> dict[str, str]:
-        environment = {key: os.environ[key] for key in _RUNTIME_ENVIRONMENT if key in os.environ}
+    def runtime_environment(self) -> dict[str, str]:
+        environment = {key: value for key, value in self.options.runtime_environment.items()
+                       if key in _RUNTIME_ENVIRONMENT and isinstance(value, str) and "\x00" not in value}
+        environment.update({key: os.environ[key] for key in _RUNTIME_ENVIRONMENT if key in os.environ})
         configured_root = environment.get("DOCKBENCH_WORKSPACE")
         try:
             if self.options.workspace_root is not None:
@@ -174,7 +177,7 @@ class ServerDeployment:
     def _write_runtime_config(self, environment: Mapping[str, str] | None = None) -> dict[str, str]:
         self._mkdir_private(self.config_dir)
         self._mkdir_private(self.state_dir)
-        values = dict(environment) if environment is not None else self._snapshot_environment()
+        values = dict(environment) if environment is not None else self.runtime_environment()
         config = {
             "schema_version": 1,
             "repository_root": str(self.options.repository_root),
@@ -243,7 +246,7 @@ class ServerDeployment:
             "__SERVER_PORT__": str(self.options.port),
         }
         for old, new in substitutions.items():
-            template = template.replace(old, new)
+            template = template.replace(old, new if old == "__SERVER_PORT__" else json.dumps(new).replace("%", "%%"))
         self._mkdir_private(self.unit_path.parent)
         self._write_private(self.unit_path, template)
         for command in (
@@ -255,7 +258,7 @@ class ServerDeployment:
         return DeploymentResult("systemd", self.url, self.config_path, self.environment_path, unit_path=self.unit_path)
 
     def _fallback_command(self, uv: str) -> list[str]:
-        return [uv, "run", "--frozen", "--project", str(self.options.repository_root), "dockbench", "serve", "--port", str(self.options.port), "--config", str(self.config_path)]
+        return [uv, "run", "--frozen", "--project", str(self.options.repository_root), "dockbench", "server", "start", "--foreground", "--port", str(self.options.port), "--runtime-config", str(self.config_path)]
 
     def _install_fallback(self, uv: str, environment: Mapping[str, str]) -> DeploymentResult:
         self._stop_managed_fallback()
@@ -293,7 +296,7 @@ class ServerDeployment:
         raise DeploymentError(f"Dockbench did not become healthy at {self.url}: {last_error}. {diagnostics}")
 
     def deploy(self) -> DeploymentResult:
-        environment = self._snapshot_environment()
+        environment = self.runtime_environment()
         uv, npm = self._require_build_tools()
         self._build(uv, npm)
         self._write_runtime_config(environment)

@@ -1,0 +1,3 @@
+# Host settings belong to the Dockbench server and connection client
+
+Dockbench keeps user-managed host settings in `config/dockbench.yaml`, separate from versioned image recipes: host ports, workspace roots, state locations, and connection preferences vary by machine and must not change image contents or recreate managed containers. Image recipes retain their existing manifests and container commands retain their existing defaults; merging these into a universal configuration would couple server administration to container persistence and image builds. Desired YAML is also separate from the effective allowlisted runtime snapshot and installed process identity, so an edited or malformed desired file cannot redefine the server that status and stop must find.

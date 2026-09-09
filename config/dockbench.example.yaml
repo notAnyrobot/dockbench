@@ -1,0 +1,13 @@
+# Copy to config/dockbench.yaml and edit for this host. Dockbench never writes it.
+# All settings are optional except schema_version. Relative paths are relative
+# to this file's directory; ~/ expands to your home directory.
+schema_version: 1
+server:
+  port: 8787
+  # workspace: ~/workspace
+  # state_root: ~/.dockbench
+  # docker_command: docker
+web:
+  remote_port: 8787
+  local_port: null  # Automatically choose a free loopback tunnel port.
+  open_browser: true

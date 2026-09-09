@@ -64,7 +64,7 @@ def test_new_deployment_ignores_legacy_environment(tmp_path, monkeypatch):
     deployment = _deployment(tmp_path)
     monkeypatch.setenv("ROBOTICS_WS_CODE_ROOT", "/legacy/Code")
 
-    assert deployment._snapshot_environment() == {
+    assert deployment.runtime_environment() == {
         "DOCKBENCH_WORKSPACE": str(tmp_path / "workspace"),
     }
 
@@ -80,7 +80,7 @@ def test_deployment_uses_workspace_from_environment_when_cli_does_not_override(t
     ))
     monkeypatch.setenv("DOCKBENCH_WORKSPACE", str(workspace))
 
-    assert deployment._snapshot_environment() == {
+    assert deployment.runtime_environment() == {
         "DOCKBENCH_WORKSPACE": str(workspace),
     }
 
@@ -182,7 +182,7 @@ def test_fallback_replaces_old_process_persists_metadata_and_status(tmp_path, mo
     monkeypatch.setattr(subprocess, "Popen", lambda *args, **kwargs: Process())
     result = deployment._install_fallback("/bin/uv", {})
     assert result.manager == "process" and result.pid == 42
-    assert json.loads(deployment.metadata_path.read_text())["command"][-5:] == ["serve", "--port", "8787", "--config", str(deployment.config_path)]
+    assert json.loads(deployment.metadata_path.read_text())["command"][-7:] == ["server", "start", "--foreground", "--port", "8787", "--runtime-config", str(deployment.config_path)]
     status = deployment.status()
     assert status.manager == "process" and status.state == "running"
     deployment.stop()
