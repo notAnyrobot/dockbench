@@ -229,17 +229,34 @@ The hidden deprecated `deploy` and `serve` aliases remain available with migrati
 guidance on stderr. Legacy `serve --config` still means the old JSON runtime file,
 while canonical `--config` selects host YAML.
 
-On a local machine, create an SSH tunnel to the remote browser server:
+Open an existing local server, or supply an explicit SSH host for remote access:
 
 ```bash
-uv run dockbench connect USER@HPC_HOST
-uv run dockbench connect research-hpc --local-port 9878 --remote-port 8787
-uv run dockbench connect research-hpc --open-browser
+uv run dockbench web
+uv run dockbench web --port 9878 --no-open
+uv run dockbench web USER@HPC_HOST
+uv run dockbench web research-hpc --local-port 9878 --port 8787
+uv run dockbench web research-hpc --config ~/dockbench-client.yaml
 ```
 
-Open the printed `127.0.0.1` URL and keep the tunnel command running while
-using Dockbench. The server binds only to `127.0.0.1` on the remote host; it is
-not exposed to the network.
+`web` verifies readiness, prints the loopback URL, and opens your browser by
+default. `--no-open` disables browser opening; `--open-browser` overrides the YAML
+preference. It never starts, deploys, or rebuilds a server. Without an SSH host,
+access is always local: the destination port comes from `--port`, YAML
+`server.port`, a compatible saved deployment, then 8787. With an explicit SSH
+host it comes from `--port`, YAML `web.remote_port`, then 8787. Remote access does
+not require the configured local workspace directory to exist.
+
+Remote forwarding uses `--local-port`, then YAML `web.local_port`; an omitted or
+null setting selects 8787 when free, otherwise a free local port. An explicitly
+occupied port fails with guidance. Keep the tunnel command running while using
+Dockbench and press Ctrl+C to close it. Interactive SSH authentication retains
+its normal prompts. The server and tunnel bind only to `127.0.0.1`.
+
+If browser launch fails, open the printed URL manually; the remote tunnel stays
+available until interrupted. The hidden deprecated `connect` alias retains
+`--remote-port` and its opt-in `--open-browser` default. Migrate scripts to
+`web HOST --port PORT --no-open` to retain that browser behavior.
 
 ### Rootless Docker with NVIDIA GPUs
 

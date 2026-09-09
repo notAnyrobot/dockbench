@@ -141,7 +141,7 @@ def _terminate(process: subprocess.Popen[object]) -> None:
 def _unavailable_error(ssh_host: str, remote_port: int) -> WorkstationError:
     return WorkstationError(
         f"Dockbench did not answer through the local forward to {ssh_host} remote port {remote_port}. "
-        "Verify 'dockbench server status' (or, if needed, 'dockbench deploy') on the remote host "
+        "Verify 'dockbench server status' (or, if needed, 'dockbench server deploy') on the remote host "
         "and SSH forwarding, then retry."
     )
 
@@ -200,7 +200,11 @@ def connect(
                 if on_ready is not None:
                     on_ready(url)
                 if open_browser:
-                    browser_opened = bool(webbrowser.open(url))
+                    try:
+                        browser_opened = bool(webbrowser.open(url))
+                    except Exception:
+                        # Browser integration must not take ownership of a usable tunnel.
+                        browser_opened = False
                 break
             time.sleep(HEALTH_POLL_INTERVAL_SECONDS)
         else:
@@ -213,3 +217,21 @@ def connect(
         return ServerConnectionResult(host, local, remote, url, browser_opened, True)
     finally:
         _terminate(process)
+
+
+def open_local(*, port: int = DEFAULT_SERVER_PORT, open_browser: bool = True,
+               on_ready: Callable[[str], None] | None = None) -> bool:
+    """Check an existing local server, announce its URL, and optionally open it."""
+    port = _validate_port('port', port)
+    url = f'http://127.0.0.1:{port}'
+    if not _health_ready(url):
+        raise WorkstationError(
+            f'Dockbench did not answer at {url}. Verify `dockbench server status` and retry.'
+        )
+    if on_ready is not None:
+        on_ready(url)
+    try:
+        return bool(webbrowser.open(url)) if open_browser else False
+    except Exception:
+        # The announced URL remains usable when desktop integration fails.
+        return False

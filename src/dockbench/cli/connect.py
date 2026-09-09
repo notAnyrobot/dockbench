@@ -1,6 +1,6 @@
 """CLI connect command ownership."""
 import argparse
-from pathlib import Path
+import sys
 
 from dockbench.cli.common import fail as _fail, port as _port
 from dockbench.core.server_connection import DEFAULT_SERVER_PORT
@@ -19,10 +19,11 @@ def _connect(ssh_host: str, local_port: int | None, remote_port: int, open_brows
         return _fail(str(exc))
 
 def run(args: argparse.Namespace) -> int:
+    print("`dockbench connect` is deprecated; use `dockbench web`. Browser opening now defaults on.", file=sys.stderr)
     return _connect(args.ssh_host, args.local_port, args.remote_port, args.open_browser)
 
 def register(actions) -> None:
-    connect_command = actions.add_parser("connect", help="Open a local SSH tunnel to a deployed Dockbench.")
+    connect_command = actions.add_parser("connect")
     connect_command.add_argument("ssh_host", help="SSH host, user@host, or configured SSH alias.")
     connect_command.add_argument("--local-port", type=_port, default=None)
     connect_command.add_argument("--remote-port", type=_port, default=DEFAULT_SERVER_PORT)

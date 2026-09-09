@@ -4,7 +4,7 @@ from __future__ import annotations
 import argparse
 from typing import Sequence
 
-from dockbench.cli import archives, connect, containers, deploy, recipes, serve, server
+from dockbench.cli import archives, connect, containers, deploy, recipes, serve, server, web
 from dockbench.cli.containers import run as _workstation
 from dockbench.core.backend import Backend
 
@@ -12,7 +12,7 @@ from dockbench.core.backend import Backend
 def parser() -> argparse.ArgumentParser:
     command = argparse.ArgumentParser(prog="dockbench", description="Manage Dockbench.")
     actions = command.add_subparsers(dest="command", metavar="COMMAND")
-    for commands in (deploy, connect, serve, server):
+    for commands in (deploy, connect, serve, server, web):
         commands.register(actions)
     containers.register(actions)
     image = actions.add_parser("image", help="Build, verify, export, or import images.")
