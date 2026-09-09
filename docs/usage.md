@@ -310,4 +310,3 @@ No image rebuild, container recreation, or desktop configuration change is neede
 The runtime and historical design inputs were imported from
 [`notAnyrobot/awesome-robotics`](https://github.com/notAnyrobot/awesome-robotics)
 commits `4765bef`, `060758f`, and `0b25b71`.
-
